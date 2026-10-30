@@ -8,14 +8,12 @@ import net.minecraft.world.phys.EntityHitResult;
 import client.nilore.event.EventTarget;
 import client.nilore.event.impl.EntityRemoveEvent;
 import client.nilore.event.impl.MotionEvent;
-import client.nilore.event.impl.PlayerTickEvent;
 import client.nilore.event.impl.PreMotionEvent;
 import client.nilore.event.impl.StrafeEvent;
 import client.nilore.modules.Category;
 import client.nilore.modules.Module;
 import client.nilore.settings.impl.BooleanSetting;
 import client.nilore.settings.impl.ModeSetting;
-import client.nilore.settings.impl.NumberSetting;
 import client.nilore.utils.game.RotationUtil;
 import client.nilore.utils.misc.ChatUtil;
 import client.nilore.utils.rotation.Rotation;
@@ -26,10 +24,7 @@ public class Critical extends Module {
 
     public static volatile boolean stopAttack = false;
 
-    public final ModeSetting mode = new ModeSetting("Mode", "Grim", "SkipTicks", "Optimize").withDefault("Optimize");
-
-    public final NumberSetting skipTicksRange = new NumberSetting("SkipTicks Range", 2.4, 1.0, 6.0, 0.1,
-            () -> this.mode.is("SkipTicks"));
+    public final ModeSetting mode = new ModeSetting("Mode", "Grim", "Optimize").withDefault("Optimize");
 
     public final BooleanSetting autoJump = new BooleanSetting("Auto Jump", false);
 
@@ -40,7 +35,6 @@ public class Critical extends Module {
     private boolean isSprint;
     private boolean again;
     private boolean balance;
-    private int skipTicks;
 
     public Critical() {
         super("Critical", Category.COMBAT);
@@ -63,7 +57,6 @@ public class Critical extends Module {
         this.isSprint = false;
         this.again = false;
         this.balance = false;
-        this.skipTicks = 0;
         stopAttack = false;
     }
 
@@ -72,32 +65,8 @@ public class Critical extends Module {
         if (mc.player == null) {
             return;
         }
-        if (this.mode.is("SkipTicks")) {
-            this.updateSkipTicks();
-        } else if (this.mode.is("Optimize")) {
+        if (this.mode.is("Optimize")) {
             this.optimizeExtraAttack();
-        }
-    }
-
-    private void updateSkipTicks() {
-        Entity target = KillAura.target;
-        if (target == null) {
-            return;
-        }
-        if (this.cantCrit(target)) {
-            this.skipTicks = 0;
-            return;
-        }
-        boolean auraActive = KillAura.INSTANCE != null && KillAura.INSTANCE.isEnabled();
-        if (mc.player.getDeltaMovement().y < 0.0
-                && !mc.player.onGround()
-                && auraActive
-                && mc.player.distanceTo(target) <= this.skipTicksRange.getValue().floatValue()) {
-            if (this.skipTicks <= 0) {
-                this.skipTicks++;
-            }
-        } else if (!auraActive) {
-            this.skipTicks = 0;
         }
     }
 
@@ -183,12 +152,6 @@ public class Critical extends Module {
         if (mc.player == null || event.dead()) {
             return;
         }
-        if (this.mode.is("SkipTicks")) {
-            if (mc.player.fallDistance > 0.0f && !mc.player.isSprinting() && mc.player.hurtTime < 2) {
-                this.debugLog("Crit.");
-            }
-            return;
-        }
         if (!(event.entity() instanceof LivingEntity living)) {
             this.enemy = null;
             this.isAttack = false;
@@ -207,22 +170,6 @@ public class Critical extends Module {
             }
             this.debugLog("Crit.");
         }
-    }
-
-    @EventTarget
-    public void onPlayerTick(PlayerTickEvent event) {
-        if (!this.consumeSkipTick()) {
-            return;
-        }
-        event.setCancelled(true);
-    }
-
-    public boolean consumeSkipTick() {
-        if (!this.isEnabled() || !this.mode.is("SkipTicks") || this.skipTicks <= 0) {
-            return false;
-        }
-        this.skipTicks--;
-        return true;
     }
 
     private void releaseSprint() {

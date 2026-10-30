@@ -46,7 +46,7 @@ private:
     void styleApp();
     void enableWin11RoundedCorners();
 
-    // Early Mode auto-injection: fires for a Minecraft java process the loader
+    // Native Bypass auto-injection: fires for a Minecraft java process the loader
     // has not handled yet. Deliberately driven off the raw java process list and
     // its command line, NOT off the windowed instance list: the window only shows
     // up after Forge/mod loading, which is far too late to be "early". Pids we
@@ -56,7 +56,7 @@ private:
 
     // Tray balloon for the injection result. The overlay only lives a couple of
     // seconds, so without this the outcome is easy to miss - which is exactly
-    // how "I never saw Early Mode do anything" happens.
+    // how "I never saw Native Bypass do anything" happens.
     void notify(const QString& title, const QString& body);
 
     TitleBar*        titleBar_ = nullptr;

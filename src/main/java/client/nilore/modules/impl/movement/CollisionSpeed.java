@@ -30,12 +30,13 @@ import client.nilore.event.EventTarget;
  */
 public class CollisionSpeed extends Module {
     /**
-     * 判定碰撞用的 AABB 外扩量, 写死 0.1 格。
+     * 判定碰撞用的 AABB 外扩量。
      *
-     * <p>换算成中心距大约是 0.3(自身半宽) + 0.1 + 0.3(目标半宽) ≈ 0.7 格 —— 比原版的
-     * 0.25 更"贴身"一档, 只有几乎重叠时才算接触。
+     * <p>0.6 格换算成中心距约 0.3(自身半宽) + 0.6 + 0.3(目标半宽) ≈ 1.2 格，比绕圈半径
+     * （0.65~1.0）还大 —— 判定比实际接触还宽 0.4 格。收到 0.2 后中心距约 0.8 格，
+     * 正好落在绕圈半径里：贴上去才算接触，不会隔着半格就判定成推挤。
      */
-    private static final double COLLISION_EXPAND = 0.1;
+    private static final double COLLISION_EXPAND = 0.2;
     /** 单实体的基础增量(格/tick), 再乘接触数量。 */
     private static final double BASE_BOOST = 0.065;
     /**
@@ -44,7 +45,7 @@ public class CollisionSpeed extends Module {
      */
     private static final double SPEED_LIMIT = 0.34;
 
-    public final BooleanSetting onlyOnGround = new BooleanSetting("Only On Ground", false);
+    public final BooleanSetting onlyInAir = new BooleanSetting("Only Air", true);
     public final BooleanSetting strafeBoost = new BooleanSetting("Strafe Boost", true);
 
     /** 单实体基础增量(格/tick); 上界与 {@link SpeedGrimCollide} 的入参校验一致。 */
@@ -62,7 +63,7 @@ public class CollisionSpeed extends Module {
                 || mc.player == null
                 || mc.level == null
                 || !MovementUtil.isInputActive()
-                || (this.onlyOnGround.getValue() && !mc.player.onGround())) {
+                || (this.onlyInAir.getValue() && mc.player.onGround())) {
             return;
         }
 
@@ -75,10 +76,10 @@ public class CollisionSpeed extends Module {
         SpeedAccess.Collision collision = SpeedAccess.Collision.of(contacts, motion.x, motion.z);
 
         double yawRad = MovementUtil.getMovementYaw();
-        if (this.strafeBoost.getValue() && TargetStrafe.INSTANCE != null && TargetStrafe.INSTANCE.isEnabled()
-                && TargetStrafe.strafeTarget != null
-                && (!TargetStrafe.isSmartStrafe() || mc.options.keyJump.isDown())) {
-            yawRad = this.strafeYawRad(yawRad);
+        if (this.strafeBoost.getValue() && TargetStrafe.isOrbiting()) {
+            // 和输入方向用同一条平滑朝向。以前这里拿的是"纯切向"，与输入里的径向分量
+            // 差十几度，两股力合成的位移既不是切向也不是径向 —— 绕圈时左右摆动就是这么来的。
+            yawRad = TargetStrafe.orbitYawRad();
         }
 
         double increment = SpeedGrimCollide.increment(collision, (float) yawRad,
@@ -88,25 +89,6 @@ public class CollisionSpeed extends Module {
             return;
         }
         MovementUtil.strafeWithYaw(yawRad, increment);
-    }
-
-    /**
-     * 绕目标横移时的移动方向: 把当前朝向按目标半径折算成一个很小的角度偏移, 再取
-     * "目标 -> 玩家" 的反向作为前进方向。角度步长随注入量缩放, 所以速度越快绕得越快,
-     * 但任何一 tick 的偏移都远小于 1 度。
-     */
-    private double strafeYawRad(double fallback) {
-        Entity target = TargetStrafe.strafeTarget;
-        if (target == null) {
-            return fallback;
-        }
-        double range = Math.max(TargetStrafe.getRange(), 0.1);
-        double stepDegrees = this.boost.getValue().doubleValue() / (range * Math.PI * 2.0) * 360.0 * TargetStrafe.strafeDirectionSign;
-        Vec3 playerPos = mc.player.position();
-        Vec3 targetPos = new Vec3(target.getX(), target.getY(), target.getZ());
-        double baseYaw = Math.toDegrees(Math.atan2(targetPos.z - playerPos.z, targetPos.x - playerPos.x)) + 90.0 + stepDegrees;
-        // 目标始终在移动, 用同一条路径把角度落后一 tick 的滞后补回来。
-        return Math.toRadians(baseYaw);
     }
 
     /** 统计这一 tick 会被服务端算作推挤来源的实体数量。 */

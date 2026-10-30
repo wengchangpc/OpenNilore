@@ -48,6 +48,7 @@ import client.nilore.patch.PacketUtilsPatch;
 import client.nilore.patch.PlayerPatch;
 import client.nilore.patch.PlayerTabOverlayPatch;
 import client.nilore.asm.Bootstrap;
+import client.nilore.render.Fonts;
 import client.nilore.utils.rotation.RotationHandler;
 import client.nilore.utils.misc.Assets;
 
@@ -87,6 +88,9 @@ public class NiloreClient extends ClientBase {
 
     private void init() {
         try {
+            // Started before the mapping load and the retransform so the font parsing (11 MB
+            // pingfang dominates) overlaps with work that blocks the game thread anyway.
+            Fonts.preloadFontsAsync();
             username = System.getProperty("user.name", "Player");
             File dir = new File(configDir);
             if (!dir.exists() && !dir.mkdirs()) {

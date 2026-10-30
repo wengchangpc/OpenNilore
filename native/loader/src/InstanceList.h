@@ -15,7 +15,7 @@ namespace loader {
 struct Instance {
     unsigned long pid;
     QString title;
-    QString commandLine;   // full command line (from JavaProcess), used by Early Mode to relaunch
+    QString commandLine;   // full command line (from JavaProcess), used by Native Bypass to relaunch
 };
 
 class InstanceRow;
@@ -50,9 +50,9 @@ public:
     // that fades out.
     void markInjected(unsigned long pid);
 
-    // Tag the row with the green Early Mode badge. Remembered per pid so the
+    // Tag the row with the green Native Bypass badge. Remembered per pid so the
     // badge survives the list rebuild that happens once per second.
-    void markEarlyInjected(unsigned long pid);
+    void markNativeBypassed(unsigned long pid);
 
 signals:
     void injectRequested(unsigned long pid, const QString& title, const QString& commandLine);
@@ -67,9 +67,9 @@ private:
     QLabel*      emptyLabel_       = nullptr;
 
     QHash<unsigned long, InstanceRow*> rows_;
-    // Pids Early Mode has taken over, so the badge is re-applied whenever the
+    // Pids Native Bypass has taken over, so the badge is re-applied whenever the
     // row is rebuilt (rows are recreated on refresh).
-    QSet<unsigned long> earlyInjected_;
+    QSet<unsigned long> nativeBypassed_;
     bool interactive_ = true;
 };
 

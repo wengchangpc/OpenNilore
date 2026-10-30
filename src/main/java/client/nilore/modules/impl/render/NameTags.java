@@ -14,7 +14,7 @@ import client.nilore.event.EventTarget;
 public class NameTags
 extends Module {
     public static NameTags INSTANCE;
-    public final ModeSetting styleSetting = new ModeSetting("Style", "Opal", "Simple").withDefault("Simple");
+    public final ModeSetting styleSetting = new ModeSetting("Style", "Opal", "Simple", "Naven").withDefault("Simple");
     public final NumberSetting scaleSetting = new NumberSetting("Scale", 0.6, 0.1, 1.0, 0.01);
     public final NumberSetting distanceSetting = new NumberSetting("Max Distance", 128, 8.0, 256.0, 1.0);
     public final BooleanSetting showHealthSetting = new BooleanSetting("Invisibles", true);

@@ -14,16 +14,20 @@ import client.nilore.render.DrawContext;
 import client.nilore.render.FontRenderer;
 import client.nilore.render.FontPresets;
 import client.nilore.render.Fonts;
+import client.nilore.render.GlyphMetrics;
 import client.nilore.render.Paint;
+import client.nilore.render.Rectangle;
 import client.nilore.render.RoundedRectangle;
 import client.nilore.settings.impl.BooleanSetting;
 import client.nilore.settings.impl.ModeSetting;
 import client.nilore.event.EventTarget;
 import client.nilore.utils.render.RenderUtil;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 import net.minecraft.client.gui.GuiGraphics;
 
 public class Watermark extends Module {
-    final ModeSetting styleSetting = new ModeSetting("Style", "Neverlose", "DynamicIsland", "Simple", "Pharos", "Exhibition", "Logo").withDefault("Exhibition");
+    final ModeSetting styleSetting = new ModeSetting("Style", "Neverlose", "DynamicIsland", "Simple", "Pharos", "Exhibition", "Logo", "Naven").withDefault("Exhibition");
     private final BooleanSetting showFpsSetting = new BooleanSetting("Show FPS", true, () -> this.styleSetting.is("Exhibition"));
     private final BooleanSetting showMsSetting = new BooleanSetting("Show MS", true, () -> this.styleSetting.is("Exhibition"));
     private final DynamicIsland dynamicIsland = new DynamicIsland();
@@ -87,6 +91,81 @@ public class Watermark extends Module {
             case "Logo":
                 this.logoWatermark.onGlRender(glRenderEvent);
                 break;
+            case "Naven":
+                this.renderNaven(ctx);
+                break;
+        }
+    }
+
+    // Naven style. Geometry follows Naven's own HUD watermark (panel sized text+14 x text+8,
+    // radius 5, 3px header bar, text inset 7 from the left), while the header/body colours and
+    // the way the bar hugs the rounded corners follow the client's own Naven look in
+    // Scaffold.renderNavenBlockHud: draw the body, then clip to the top 3px and draw the very
+    // same rounded rect again in red.
+    private static final FontRenderer NAVEN_FONT = FontPresets.pingfang(24.0f);
+    private static final float NAVEN_RADIUS = 5.0f;
+    private static final float NAVEN_PAD_X = 6.0f;
+    private static final float NAVEN_TEXT_TOP = 5.0f;
+    private static final float NAVEN_PAD_BOTTOM = 3.0f;
+    private static final float NAVEN_HEADER_H = 3.0f;
+    private static final int NAVEN_ALPHA = 190;
+    private static final int NAVEN_BODY_COLOR = NAVEN_ALPHA << 24;
+    private static final int NAVEN_HEADER_COLOR = NAVEN_ALPHA << 24 | 0x962D2D;
+    private static final int NAVEN_TEXT_COLOR = 0xFFFFFFFF;
+    private static final int NAVEN_TEXT_SHADOW = 0x64000000;
+    private static final DateTimeFormatter NAVEN_CLOCK = DateTimeFormatter.ofPattern("HH:mm:ss");
+    private static final float NAVEN_RISE = 2.0f;
+    private static final float NAVEN_TEXT_RISE = 2.0f;
+
+    private String gameName() {
+        if (mc.player != null) {
+            String name = mc.player.getGameProfile().getName();
+            if (name != null && !name.isEmpty()) {
+                return name;
+            }
+        }
+        return NiloreClient.username;
+    }
+
+    private void renderNaven(DrawContext ctx) {
+        if (mc.player == null) return;
+
+        String text = NiloreClient.CLIENT_NAME + " | " + NiloreClient.VERSION + " | "
+                + gameName() + " | " + mc.getFps() + " FPS | "
+                + LocalTime.now().format(NAVEN_CLOCK);
+
+        FontRenderer font = NAVEN_FONT;
+        GlyphMetrics metrics = font.getMetrics();
+        float lineHeight = metrics.getLineHeight();
+        float boxW = font.getWidth(text) + NAVEN_PAD_X * 2.0f;
+        float boxH = NAVEN_TEXT_TOP + lineHeight + NAVEN_PAD_BOTTOM;
+        float x = MARGIN;
+        float y = MARGIN - NAVEN_RISE;
+
+        RenderUtil.drawBlurredRect(ctx.getPoseStack(), x, y, boxW, boxH, NAVEN_RADIUS,
+                SIMPLE_BLUR_STRENGTH, SIMPLE_BLUR_OPACITY, 0);
+
+        try (Paint paint = new Paint()) {
+            paint.setColor(NAVEN_BODY_COLOR);
+            ctx.drawRoundedRect(RoundedRectangle.ofXYWHR(x, y, boxW, boxH, NAVEN_RADIUS), paint);
+            // Red header: same rounded rect, clipped to the top strip, so the bar follows the
+            // panel's top corners instead of squaring them off.
+            ctx.save();
+            ctx.clip(Rectangle.ofXYWH(x, y, boxW, NAVEN_HEADER_H));
+            paint.setColor(NAVEN_HEADER_COLOR);
+            ctx.drawRoundedRect(RoundedRectangle.ofXYWHR(x, y, boxW, boxH, NAVEN_RADIUS), paint);
+            ctx.restore();
+        }
+
+        // DrawContext.drawString treats y as "text top + ascent()", and ascent() is negative here,
+        // so the offset has to add it back; without this the text floats above the panel.
+        float textX = x + NAVEN_PAD_X;
+        float textY = y + NAVEN_TEXT_TOP - metrics.ascent() + 1.0f - NAVEN_TEXT_RISE;
+        try (Paint paint = new Paint()) {
+            paint.setColor(NAVEN_TEXT_SHADOW);
+            ctx.drawString(text, textX + 0.5f, textY + 0.5f, font, paint);
+            paint.setColor(NAVEN_TEXT_COLOR);
+            ctx.drawString(text, textX, textY, font, paint);
         }
     }
 

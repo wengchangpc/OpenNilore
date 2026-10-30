@@ -87,6 +87,13 @@ public class KillAura extends Module {
     private static final double MAX_REACH = 3.0;
     /** Per-tick pull of the organic aim offsets back toward the aim point (AR(1) decay). */
     private static final float ORGANIC_DECAY = 0.85f;
+    /**
+     * 旧朝向打不中时，允许用本 tick 的瞄准结果放行的最大角度差。
+     *
+     * <p>超过这个差就不是"目标挪了一格"，而是"这一 tick 还在转身"，那种情况下放行等于用
+     * 一个服务端还没看到的角度出手，只会换来 Hitboxes/Reach 的抖动。
+     */
+    private static final float FRESH_SIGHT_MAX_DELTA = 30.0f;
 
     private static final ResourceLocation NURIK_CAPTURE_TEXTURE = ResourceLocation.tryParse("nilore:nurik/capture");
     private static final String NURIK_CAPTURE_ASSET = "/assets/nilore/nurik/capture.png";
@@ -129,6 +136,9 @@ public class KillAura extends Module {
 
     public final NumberSetting rotationJitter = new NumberSetting("Jitter", 1.3, 0, 3, 0.1);
 
+    /** 把当前拦住攻击的那道门显示在模块列表后缀上，排查"为什么这一拍不打"用。 */
+    public final BooleanSetting debugGate = new BooleanSetting("Debug Gate", false);
+
     private int attackTimes;
     private float attacks;
     private int targetIndex;
@@ -136,6 +146,8 @@ public class KillAura extends Module {
     public Rotation rotation;
     /** 本 tick 攻击使用的服务端朝向快照, 见 {@link #authoritativeAttackRotation()}。 */
     private Rotation authoritativeRotation;
+    /** 本 tick 被哪道门拦下（仅用于 {@link #getSuffix()} 的排查显示）。 */
+    private String gateBlock;
 
     private Random organicRandom;
     private final RotationSmoother rotSmoother = new RotationSmoother(new Random());
@@ -176,6 +188,15 @@ public class KillAura extends Module {
         this.organicRandom = new Random(System.nanoTime());
         this.organicYawOffset = 0.0f;
         this.organicPitchOffset = 0.0f;
+    }
+
+    /** Debug Gate 打开时把当前拦住攻击的那道门挂到模块列表后缀上。 */
+    @Override
+    public String getSuffix() {
+        if (!(Boolean) this.debugGate.getValue()) {
+            return null;
+        }
+        return this.gateBlock;
     }
 
     private Rotation computeRotation(Entity target, Rotation from, double speed, double range) {
@@ -565,29 +586,33 @@ public class KillAura extends Module {
      *                      {@link #rotation} —— 后者还没发出去, 服务端不会用它校验这次交互。
      */
     private boolean canAttackNow(Rotation authoritative) {
+        this.gateBlock = null;
         if (mc.player == null || mc.screen != null || mc.player.isUsingItem()) {
-            return false;
+            return this.deny("using");
         }
         if (target == null || !targetList.contains(target)) {
-            return false;
+            return this.deny("no-target");
         }
         double reachNow = Math.min(Math.max(this.reach.getValue().doubleValue(),
                 RotationUtil.getReachLimit()), MAX_REACH);
-        // Sight and distance now share one cap: the raycast used to allow the full reach while
+        // Sight and distance share one cap: the raycast used to allow the full reach while
         // isWithinReach already subtracted the margin, so a target sitting in that last strip passed
-        // the visibility check and was then dropped by the distance gate every few ticks.
+        // the visibility check and was then dropped by the distance gate every few ticks. Both now
+        // subtract the same (much smaller) margin, see RotationUtil#REACH_MARGIN.
         double sightRange = reachNow - RotationUtil.REACH_MARGIN;
         // Through Walls only skips the block-clipped raycast inside Through Walls Range; beyond
         // it the attack still has to see the target, otherwise the range slider is never read.
-        if (!this.ignoreBlocksAt(target) && !RotationUtil.isLookingAt(target, sightRange, 0.1f, authoritative)) {
-            return false;
+        if (!this.ignoreBlocksAt(target)
+                && !RotationUtil.isLookingAt(target, sightRange, 0.1f, authoritative)
+                && !this.freshAimSees(target, sightRange, authoritative)) {
+            return this.deny("sight");
         }
         if (this.delayMode.is("1.9") && mc.player.getAttackStrengthScale(0.0f) < 0.95f) {
-            return false;
+            return this.deny("cooldown");
         }
         if (!(this.ignoreSkipTicks.getValue() || ClientBase.delayPackets.isEmpty()
                 || (Critical.INSTANCE != null && Critical.INSTANCE.isEnabled()))) {
-            return false;
+            return this.deny("skip-ticks");
         }
         // Velocity gate. The counter hits are sprint hits by construction - the NoXZ counter only
         // swings while isSprinting() holds - so they cannot crit, and swinging the aura into the
@@ -596,15 +621,51 @@ public class KillAura extends Module {
         // (on ground, mid-counter, or about to land) the aura stays out so the window's own
         // isSprinting() gate stays true.
         if (NoXZMode.isCountering()) {
-            return false;
+            return this.deny("noxz-counter");
         }
         if (NoXZMode.isInDelayWindow() && shouldKeepSprintInDelayWindow()) {
+            return this.deny("noxz-window");
+        }
+        if (this.keepSprint.getValue() && mc.player.isSprinting()
+                && !NoXZMode.handlingVelocity && this.canCritUnderVelocity()) {
+            // Waiting one tick is only worth it when SprintEvent is actually going to drop the
+            // sprint this tick (that is what canCritUnderVelocity() answers): then the next move
+            // packet carries STOP_SPRINTING and the server settles the hit as a crit. When it
+            // cannot - target out of the 3.5 crit reach, mid jump-reset, NOXZ owning the input -
+            // the old gate still closed and the aura stood there doing nothing, which is the
+            // "inside 3.0 and it just will not swing" report.
+            return this.deny("sprint");
+        }
+        if (!RotationUtil.isWithinReach(target)) {
+            return this.deny("reach");
+        }
+        return true;
+    }
+
+    /**
+     * 本 tick 新算出来的朝向是否打得到目标，供 {@link #canAttackNow(Rotation)} 在旧朝向落空时兜底。
+     *
+     * <p>为什么可以这么做：interact 包排在移动包之前，服务端手里确实是上一 tick 的角度 —— 但
+     * vanilla 的 {@code ServerGamePacketListenerImpl#handleInteract} 只用距离判定，从不校验朝向；
+     * 真正看角度的是 Grim 的 Hitboxes 检查，而它只在角度明显不符时报。目标在这一 tick 里横向
+     * 移动（AD tap、击退）时，旧角度的射线会从判定盒边缘擦过去，旧实现于是整 tick 不打人。
+     * 这里只在两个角度相差不超过 {@link #FRESH_SIGHT_MAX_DELTA} 度时放行。
+     */
+    private boolean freshAimSees(Entity entity, double range, Rotation authoritative) {
+        Rotation fresh = this.rotation;
+        if (fresh == null) {
             return false;
         }
-        if (this.keepSprint.getValue() && mc.player.isSprinting() && !NoXZMode.handlingVelocity) {
+        float delta = RotationUtil.angleDiff(fresh.getYaw(), authoritative.getYaw());
+        if (Float.isNaN(delta) || delta > FRESH_SIGHT_MAX_DELTA) {
             return false;
         }
-        return RotationUtil.isWithinReach(target);
+        return RotationUtil.isLookingAt(entity, range, 0.1f, fresh);
+    }
+
+    private boolean deny(String reason) {
+        this.gateBlock = reason;
+        return false;
     }
 
     /**
@@ -709,7 +770,12 @@ public class KillAura extends Module {
             return false;
         }
         if (targetList.isEmpty()) return false;
-        if (this.rotation == null) return false;
+        // The old `if (this.rotation == null) return false;` was a second, silent gate: rotation is
+        // null whenever computeRotation() found no aim point *or* getTarget() filtered the remembered
+        // target (AntiBots) while `target` itself stayed set. canAttackNow() had already passed on
+        // that same `target`, so every tick went in, refused, and left `attacks` untouched. The only
+        // consumer of `rotation` below is the multi-target branch, which already falls back to
+        // authoritativeAttackRotation(), so the check only cost hits.
 
         if (this.targetMode.is("Multiple") || this.multiAttack.getValue()) {
             int limit = this.targetMode.is("Multiple") ? Integer.MAX_VALUE : 2;

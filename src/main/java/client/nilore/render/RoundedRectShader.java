@@ -3,6 +3,7 @@ package client.nilore.render;
 import com.mojang.blaze3d.systems.RenderSystem;
 import java.nio.FloatBuffer;
 import org.joml.Matrix4f;
+import org.joml.Vector4f;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL15;
@@ -35,6 +36,10 @@ public final class RoundedRectShader {
     private int gGlowRadius = -1;
     private int vboId = 0;
     private int vaoId = 0;
+    /** Unit-quad corners, reused by every draw so a rounded rect stops allocating. */
+    private static final float[] QUAD_OFFSETS = {-1f, -1f, 1f, -1f, 1f, 1f, -1f, -1f, 1f, 1f, -1f, 1f};
+    private final Vector4f scratchPos = new Vector4f();
+    private final float[] vertexData = new float[36];
 
     public void init() {
         if (this.programId != 0) {
@@ -210,13 +215,12 @@ public final class RoundedRectShader {
         blRadius = Math.min(Math.max(blRadius, 0.0f), maxRadius);
         float expandedHalfW = halfWidth + 1.0f;
         float expandedHalfH = halfHeight + 1.0f;
-        org.joml.Vector4f vertexPos = new org.joml.Vector4f();
-        float[] vertexData = new float[36];
-        float[][] cornerOffsets = new float[][]{{-expandedHalfW, -expandedHalfH}, {expandedHalfW, -expandedHalfH}, {expandedHalfW, expandedHalfH}, {-expandedHalfW, -expandedHalfH}, {expandedHalfW, expandedHalfH}, {-expandedHalfW, expandedHalfH}};
+        Vector4f vertexPos = this.scratchPos;
+        float[] vertexData = this.vertexData;
         for (i = 0; i < 6; ++i) {
-            vertexPos.set(centerX + cornerOffsets[i][0], centerY + cornerOffsets[i][1], 0.0f, 1.0f).mul(pose);
-            float localX = cornerOffsets[i][0];
-            float localY = cornerOffsets[i][1];
+            float localX = QUAD_OFFSETS[i * 2] * expandedHalfW;
+            float localY = QUAD_OFFSETS[i * 2 + 1] * expandedHalfH;
+            vertexPos.set(centerX + localX, centerY + localY, 0.0f, 1.0f).mul(pose);
             float u = u1 + (localX + halfWidth) / (2.0f * halfWidth) * (u2 - u1);
             float v = v1 + (localY + halfHeight) / (2.0f * halfHeight) * (v2 - v1);
             int base = i * 6;

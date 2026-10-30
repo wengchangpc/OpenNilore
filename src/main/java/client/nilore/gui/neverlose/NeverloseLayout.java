@@ -8,21 +8,59 @@ import java.util.List;
  */
 public final class NeverloseLayout {
     public static final float WIDTH = 760, HEIGHT = 496, SIDEBAR = 180, HEADER = 64;
-    public static final float RADIUS = 5.5f;
-    public static final float ROW = 29, SECTION_HEADER = 28, GAP = 18, OPTION = 25;
+    public static final float RADIUS = 7.5f;
+    /** Right padding every control keeps from the card edge — the value box used to sit flush. */
+    public static final float INSET = 12;
+    public static final float ROW = 30, GAP = 20, OPTION = 26;
+    /** Card title band: rows start below it, so this is what moves the whole card content down. */
+    public static final float SECTION_HEADER = 37;
+    /** Title centre and the hairline under it, both relative to the card's top edge. */
+    public static final float TITLE_CENTER = 17, TITLE_LINE = 33;
+    /** Breathing room between the last row of a card and its bottom edge — same as the side inset. */
+    public static final float CARD_PAD = INSET;
 
     public static final Rect WINDOW = new Rect(0, 0, WIDTH, HEIGHT);
     // Hide the backdrop's inner rounded corners beneath the opaque content panel.
     public static final Rect SIDEBAR_BACKDROP = new Rect(0, 0, SIDEBAR + RADIUS, HEIGHT);
     public static final Rect CONTENT = new Rect(202, 84, 536, HEIGHT - 84 - 20);
-    public static final Rect SEARCH = new Rect(202, 19, CONTENT.width(), 27);
+    /**
+     * Compact field pinned to the right edge of the content columns, vertically centred in the
+     * header band — the reference puts its search at the far right of the header, not across it.
+     * Derived from CONTENT/HEADER so it stays aligned if either changes.
+     */
+    private static final float SEARCH_WIDTH = 220, SEARCH_HEIGHT = 28;
+    public static final Rect SEARCH = new Rect(CONTENT.right() - SEARCH_WIDTH,
+            (HEADER - SEARCH_HEIGHT) / 2f, SEARCH_WIDTH, SEARCH_HEIGHT);
 
     public static final String[] NAV_NAMES = {"Combat", "Movement", "Player", "Render", "World", "Misc", "Ghost"};
     public static final int[] NAV_ICONS = {0, 2, 3, 4, 6, 5, 1};
-    private static final float[] NAV_Y = {96, 132, 200, 236, 304, 372, 408};
-
     public static final String[] NAV_GROUPS = {"Combat", "Player", "World", "Miscellaneous"};
-    private static final float[] NAV_GROUP_Y = {79, 183, 287, 355};
+
+    /**
+     * Sidebar rhythm, computed instead of hand-tuned.
+     *
+     * <p>The positions used to be a literal array, so the gap between a group label and its first
+     * item differed from group to group. One label band + one item pitch fixes the whole column.
+     */
+    private static final int[] NAV_GROUP_ITEMS = {2, 2, 1, 2};
+    public static final float NAV_ITEM = 29;
+    private static final float NAV_TOP = 64, NAV_LABEL = 28, NAV_ITEM_GAP = 4, NAV_GROUP_GAP = 14;
+    private static final float[] NAV_Y = new float[NAV_NAMES.length];
+    private static final float[] NAV_GROUP_Y = new float[NAV_GROUPS.length];
+
+    static {
+        float y = NAV_TOP;
+        int index = 0;
+        for (int group = 0; group < NAV_GROUPS.length; group++) {
+            NAV_GROUP_Y[group] = y + NAV_LABEL / 2f;
+            y += NAV_LABEL;
+            for (int item = 0; item < NAV_GROUP_ITEMS[group]; item++) {
+                NAV_Y[index++] = y;
+                y += NAV_ITEM + NAV_ITEM_GAP;
+            }
+            y += NAV_GROUP_GAP - NAV_ITEM_GAP;
+        }
+    }
 
     private NeverloseLayout() {
     }
@@ -73,7 +111,9 @@ public final class NeverloseLayout {
     }
 
     public static Viewport viewport(int width, int height, float x, float y) {
-        float scale = Math.max(.05f, Math.min(1, Math.min((width - 16f) / WIDTH, (height - 16f) / HEIGHT)));
+        // Capped at 0.8: the panel was too large against the HUD, so the whole thing renders 20%
+        // smaller. Glyphs are rasterised with Fonts.deviceScale(scale), so text stays crisp.
+        float scale = Math.max(.05f, Math.min(.8f, Math.min((width - 16f) / WIDTH, (height - 16f) / HEIGHT)));
         return new Viewport(clamp(x, 4, Math.max(4, width - WIDTH * scale - 4)),
                 clamp(y, 4, Math.max(4, height - HEIGHT * scale - 4)), scale);
     }
@@ -84,7 +124,7 @@ public final class NeverloseLayout {
     }
 
     public static Rect navigation(int index) {
-        return new Rect(10, NAV_Y[index], SIDEBAR - 20, 29);
+        return new Rect(10, NAV_Y[index], SIDEBAR - 20, NAV_ITEM);
     }
 
     public static float navigationGroupY(int index) {
@@ -92,22 +132,24 @@ public final class NeverloseLayout {
     }
 
     public static Rect control(Rect row) {
-        return new Rect(row.right() - 114, row.y() + (ROW - 20) / 2, 114, 20);
+        return new Rect(row.right() - INSET - 114, row.y() + (ROW - 20) / 2, 114, 20);
     }
 
+    /** Shares the dropdown's left edge so every control column lines up. */
     public static Rect slider(Rect row) {
-        return new Rect(row.right() - 114, row.y() + ROW / 2 - 6, 76, 12);
+        Rect box = control(row);
+        float right = valueBox(row).x() - 8;
+        return new Rect(box.x(), row.y() + ROW / 2 - 6, right - box.x(), 12);
     }
 
-    /** Editable value box at the right end of a number row. */
+    /** Editable value box at the right end of a number row, inset from the card edge. */
     public static Rect valueBox(Rect row) {
-        Rect track = slider(row);
-        return new Rect(track.right() + 7, row.y() + 5, 31, ROW - 10);
+        return new Rect(row.right() - INSET - 31, row.y() + (ROW - 20) / 2, 31, 20);
     }
 
     public static Rect binding(Rect section) {
-        // Centre-aligned with the section title, which is drawn at section.y() + 10.
-        return new Rect(section.right() - 67, section.y() + 1, 48, 18);
+        // Centre-aligned with the section title.
+        return new Rect(section.right() - INSET - 48, section.y() + TITLE_CENTER - 9, 48, 18);
     }
 
     public record Packed(List<Rect> sections, float height) {

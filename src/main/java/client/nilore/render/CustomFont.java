@@ -321,6 +321,9 @@ implements Closeable {
             for (ResourceLocation textureLocation : this.glyphPageMap.keySet()) {
                 RenderSystem.setShaderTexture(0, textureLocation);
                 List<GlyphEntry> entries = this.glyphPageMap.get(textureLocation);
+                if (!entries.isEmpty()) {
+                    entries.get(0).toDraw.owner().flushMipmap();
+                }
                 Tesselator tesselator = Tesselator.getInstance();
                 BufferBuilder bufferBuilder = tesselator.getBuilder();
                 bufferBuilder.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX_COLOR);
@@ -392,6 +395,10 @@ implements Closeable {
             }
             for (ResourceLocation textureLocation : this.glyphPageMap.keySet()) {
                 RenderSystem.setShaderTexture(0, textureLocation);
+                List<GlyphEntry> pageEntries = this.glyphPageMap.get(textureLocation);
+                if (!pageEntries.isEmpty()) {
+                    pageEntries.get(0).toDraw.owner().flushMipmap();
+                }
                 BufferBuilder bufferBuilder = Tesselator.getInstance().getBuilder();
                 bufferBuilder.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX_COLOR);
                 for (GlyphEntry entry : this.glyphPageMap.get(textureLocation)) {

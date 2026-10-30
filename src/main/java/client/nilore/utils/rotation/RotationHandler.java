@@ -25,6 +25,7 @@ import client.nilore.modules.impl.combat.CrystalAura;
 import client.nilore.modules.impl.combat.KillAura;
 import client.nilore.modules.impl.movement.FireballBlink;
 import client.nilore.modules.impl.movement.Scaffold;
+import client.nilore.modules.impl.movement.TargetStrafe;
 import client.nilore.modules.impl.player.AntiTNT;
 import client.nilore.modules.impl.player.AntiWeb;
 import client.nilore.modules.impl.player.AutoMLG;
@@ -121,6 +122,11 @@ public class RotationHandler
                 RotationHandler.setTargetRotation(scaffold.rots);
             } else if (killAura != null && killAura.isEnabled() && KillAura.target != null && killAura.rotation != null) {
                 RotationHandler.setTargetRotation(new Rotation(killAura.rotation.getYaw(), killAura.rotation.getPitch()));
+            } else if (TargetStrafe.INSTANCE != null && TargetStrafe.isOrbiting()) {
+                // 没有 KillAura 接管朝向时，由 TargetStrafe 把发包 yaw 指向目标。
+                // 横移输入 (0, ±1) 的世界方向就是这条 yaw 的 ±90° —— 绕目标的切向，
+                // 而且整条链路不读玩家当前视角，转镜头不会改变绕圈方向。
+                RotationHandler.setTargetRotation(TargetStrafe.aimRotation());
             } else if (antiKB != null && antiKB.isEnabled() && AntiKB.rotation != null) {
                 RotationHandler.setTargetRotation(AntiKB.rotation);
             } else {

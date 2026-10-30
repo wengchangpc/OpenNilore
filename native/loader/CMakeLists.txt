@@ -41,8 +41,6 @@ qt_add_executable(OpenNiloreLoader WIN32
     src/PillSwitch.h
     src/loader_settings.cpp
     src/loader_settings.h
-    src/syscalls.cpp
-    src/syscalls.h
     src/hwid_spoof.cpp
     src/hwid_spoof.h
     src/process_list.cpp

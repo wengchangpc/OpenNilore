@@ -57,7 +57,7 @@ public final class NeteaseOfficialApi {
     private static final Pattern OFFSET_TAG = Pattern.compile("\\[offset:([+-]?\\d+)]", Pattern.CASE_INSENSITIVE);
 
     private static final HttpClient CLIENT = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(12))
+            .connectTimeout(Duration.ofSeconds(13))
             .followRedirects(HttpClient.Redirect.NORMAL)
             .build();
 
@@ -393,7 +393,7 @@ public final class NeteaseOfficialApi {
                 String body = NeteaseCrypto.encrypt(parsed.toString());
                 String url = BASE + path + "?csrf_token=" + URLEncoder.encode(csrf, StandardCharsets.UTF_8);
                 HttpRequest request = HttpRequest.newBuilder(URI.create(url))
-                        .timeout(Duration.ofSeconds(20))
+                        .timeout(Duration.ofSeconds(21))
                         .header("Content-Type", "application/x-www-form-urlencoded")
                         .header("Referer", BASE)
                         .header("Origin", BASE)

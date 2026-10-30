@@ -24,7 +24,7 @@ namespace {
     std::wstring read_command_line(HANDLE process) {
         // Read the FULL command line from the remote PEB via
         // NtQueryInformationProcess (ProcessBasicInformation) + ReadProcessMemory.
-        // This is what Early Mode needs to relaunch the same Minecraft with all
+        // This is what Native Bypass needs to relaunch the same Minecraft with all
         // its JVM args / main class intact.
         auto pNtQuery = reinterpret_cast<NTSTATUS(NTAPI*)(HANDLE, ULONG, PVOID,
                                                          ULONG, PULONG)>(
@@ -78,7 +78,7 @@ namespace {
 }
 
 std::wstring read_working_directory(HANDLE process) {
-    // Same PEB walk as read_command_line, different field: Early Mode relaunches
+    // Same PEB walk as read_command_line, different field: Native Bypass relaunches
     // the instance and Minecraft resolves its own files relative to the working
     // directory the launcher gave it, so it has to be reproduced, not guessed.
     auto pNtQuery = reinterpret_cast<NTSTATUS(NTAPI*)(HANDLE, ULONG, PVOID,
@@ -125,7 +125,7 @@ std::wstring read_working_directory(HANDLE process) {
 }
 
 std::vector<wchar_t> read_environment_block(HANDLE process) {
-    // Early Mode relaunches the instance, so it has to look like the launcher
+    // Native Bypass relaunches the instance, so it has to look like the launcher
     // started it - same working directory, same environment. Offsets are the x64
     // RTL_USER_PROCESS_PARAMETERS layout, same walk as read_command_line.
     auto pNtQuery = reinterpret_cast<NTSTATUS(NTAPI*)(HANDLE, ULONG, PVOID,
@@ -203,7 +203,7 @@ std::vector<JavaProcess> list_java_processes() {
         // PROCESS_VM_READ is required, not optional: read_command_line() walks
         // the target's PEB with ReadProcessMemory, which QUERY_LIMITED_INFORMATION
         // alone does not permit. Without it every command line silently degraded
-        // to the bare exe path, which made Early Mode's "does this look like
+        // to the bare exe path, which made Native Bypass's "does this look like
         // Minecraft" test match nothing at all.
         HANDLE process = OpenProcess(
             PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ,

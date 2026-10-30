@@ -25,14 +25,23 @@ public class ChatComponentPatch {
     }
 
     /**
-     * Keeps click hit-testing on the shifted lines. The custom font path draws every line a fixed
-     * distance lower, so the vanilla screen-to-chat mapping has to subtract that offset again or
-     * links are only clickable one row above where they appear.
+     * Keeps click hit-testing on the shifted lines.
+     *
+     * <p>Two shifts are applied when the chat is repainted:
+     * <ul>
+     *   <li>{@code Y Offset} — a screen-space shift that applies to <b>both</b> fonts;</li>
+     *   <li>{@code LINE_DROP} — an extra per-line drop that only exists on the custom-font path.</li>
+     * </ul>
+     *
+     * <p>The old implementation bailed out entirely for the Minecraft font, so with the default
+     * {@code Y Offset = -60} every line was drawn 60 px higher while hit-testing still used the
+     * vanilla coordinates — links were only clickable six rows below where they appeared. The
+     * y-offset compensation now runs unconditionally; only the line drop is font-dependent.
      */
     @Inject(method = "screenToChatY", desc = "(D)D", at = @At(At.Type.HEAD))
     public static void onScreenToChatY(ChatComponent chat, double mouseY, CallbackInfo callbackInfo) {
         BetterChat betterChat = BetterChat.INSTANCE;
-        if (betterChat == null || !betterChat.replacesChatText() || betterChat.usesMinecraftFont()) {
+        if (betterChat == null || !betterChat.replacesChatText()) {
             return;
         }
         if (ClientBase.mc.options == null || ClientBase.mc.getWindow() == null) {
@@ -46,7 +55,10 @@ public class ChatComponentPatch {
         int guiHeight = ClientBase.mc.getWindow().getGuiScaledHeight();
         double lineSpacing = ClientBase.mc.options.chatLineSpacing().get();
         double baselineOffset = Math.round(-8.0D * (lineSpacing + 1.0D) + 4.0D * lineSpacing);
-        double adjusted = mouseY - BetterChat.LINE_DROP * scale - betterChat.textYOffset() - baselineOffset * scale;
+        double adjusted = mouseY - betterChat.textYOffset() - baselineOffset * scale;
+        if (!betterChat.usesMinecraftFont()) {
+            adjusted -= BetterChat.LINE_DROP * scale;
+        }
         callbackInfo.cancel();
         callbackInfo.result = ((double) guiHeight - adjusted - 40.0D) / (scale * (double) lineHeight);
     }

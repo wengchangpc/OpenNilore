@@ -89,26 +89,34 @@ public final class NeverloseRenderer {
             Surface surface = new Surface(dc, clip, frame.opacity(), Fonts.deviceScale(viewport.scale()));
 
             // Backdrop blur behind the window, then the rounded drop shadow in front of it.
+            // The blend colour must be white: blur.fsh multiplies the sampled blur by the vertex
+            // colour, so passing black (as this call used to) produced an opaque black plate and
+            // the sidebar could never show the world through it.
             Rect screenWindow = viewport.screen(WINDOW, frame.openingScale());
             RenderUtil.drawBlurredRect(gg.pose(), screenWindow.x(), screenWindow.y(), screenWindow.width(),
                     screenWindow.height(), RADIUS * viewport.scale() * frame.openingScale(),
-                    16f, Math.min(1f, frame.opacity()), 0xFF000000);
+                    16f, Math.min(1f, frame.opacity()), 0);
             surface.shadow(WINDOW, RADIUS);
 
             // Left sidebar tinted over the blurred backdrop, right half opaque.
+            // Lower alphas than before so the blur actually reads through as frosted glass instead of
+            // a flat dark panel, plus a sheen along the top edge for the glass highlight.
             clip.push(new Rect(0, 0, SIDEBAR, HEIGHT));
-            surface.gradient(WINDOW, RADIUS, 0xD2090A0A, 0xCC0D0E0C);
+            surface.gradient(WINDOW, RADIUS, 0xB00A0B0C, 0xA20D0E10);
+            surface.gradient(new Rect(0, 0, SIDEBAR, 160), 0, 0x12FFFFFF, 0x00FFFFFF);
             clip.pop();
 
             clip.push(new Rect(SIDEBAR, 0, WIDTH - SIDEBAR, HEIGHT));
             surface.rounded(WINDOW, RADIUS, 0xFF080808);
             clip.pop();
 
+            // Hairline glass edge around the whole window.
+            surface.border(WINDOW, RADIUS, 0x18FFFFFF);
             surface.rounded(new Rect(SIDEBAR, 0, 1, HEIGHT), 0, 0xFF242525);
             surface.rounded(new Rect(SIDEBAR, HEADER, WIDTH - SIDEBAR, 1), 0, 0xFF1C1D1D);
             surface.brand();
             surface.navigation(frame);
-            surface.editor(SEARCH, frame.search(), "Press CTRL+F to search within GUI", 30);
+            surface.editor(SEARCH, frame.search(), "CTRL+F to search", 30);
             surface.icon(8, SEARCH.x() + 15, SEARCH.y() + SEARCH.height() / 2, 11,
                     frame.search().focused() ? ACCENT : 0xFF677077);
 
@@ -285,14 +293,16 @@ public final class NeverloseRenderer {
 
         void navigation(Frame frame) {
             for (int i = 0; i < NAV_GROUPS.length; i++) {
-                text(NAV_GROUPS[i], 20, navigationGroupY(i), Face.MEDIUM, SZ_GROUP, 0xFF646B6D, 145);
+                text(NAV_GROUPS[i], 20, navigationGroupY(i), Face.MEDIUM, SZ_GROUP, 0xFF5D6468, 145);
             }
-            rounded(new Rect(10, frame.selectionY(), SIDEBAR - 20, 29), 4.5f, 0xFF3D3D3B);
+            // Selected row: translucent wash only — the reference has no accent bar, the lighter
+            // pill plus the white label is the whole selection cue.
+            rounded(new Rect(10, frame.selectionY(), SIDEBAR - 20, NAV_ITEM), 4.5f, 0x24FFFFFF);
             for (int i = 0; i < NAV_NAMES.length; i++) {
                 Rect bounds = NeverloseLayout.navigation(i);
                 float centerY = bounds.y() + bounds.height() / 2f;
                 if (i != frame.navigation() && bounds.contains(frame.mouseX(), frame.mouseY())) {
-                    rounded(bounds, 4.5f, 0x452F363C);
+                    rounded(bounds, 4.5f, 0x2EFFFFFF);
                 }
                 icon(NAV_ICONS[i], 28, centerY, 15, ACCENT);
                 text(NAV_NAMES[i], 47, centerY, Face.MEDIUM, SZ_NAV,
@@ -301,8 +311,8 @@ public final class NeverloseRenderer {
         }
 
         void editor(Rect bounds, Editor editor, String hint, float padding) {
-            rounded(bounds, 3.5f, 0xFF0E1011);
-            border(bounds, 3.5f, editor.focused() ? 0xFF315374 : 0xFF202325);
+            rounded(bounds, 4, 0xFF0C0D0E);
+            border(bounds, 4, editor.focused() ? 0xFF3D6D96 : 0xFF1F2326);
             FontRenderer font = Face.REGULAR.of(SZ_EDITOR, this.rasterScale);
             float left = bounds.x() + padding, right = bounds.right() - 9;
             clip.push(new Rect(left, bounds.y() + 2, right - left, bounds.height() - 4));
@@ -334,13 +344,19 @@ public final class NeverloseRenderer {
 
         void section(Section section, float mouseX, float mouseY) {
             Rect bounds = section.bounds();
-            float centerY = bounds.y() + 10;
-            text(section.title(), bounds.x() + 8, centerY, Face.MEDIUM, SZ_TITLE, WHITE, bounds.width() - 84);
+            // Card body: one step lighter than the window, with a hairline highlight along the top
+            // edge so the panel reads as a raised surface instead of painted-on text.
+            rounded(bounds, 5f, 0xFF0C0D0E);
+            border(bounds, 5f, 0x0FFFFFFF);
+            float centerY = bounds.y() + TITLE_CENTER;
+            text(section.title().toUpperCase(java.util.Locale.ROOT), bounds.x() + INSET, centerY, Face.MEDIUM,
+                    SZ_TITLE, 0xFFA3ABAF, bounds.width() - 84);
             Rect key = NeverloseLayout.binding(bounds);
             boolean hoverKey = key.contains(mouseX, mouseY);
-            rounded(key, 3.5f, hoverKey ? 0xFF15202A : 0xFF101314);
-            text(section.binding(), key.x() + 5, centerY, Face.REGULAR, SZ_CHIP,
-                    hoverKey ? ACCENT : 0xFF77858E, key.width() - 9);
+            rounded(key, 3.5f, hoverKey ? 0xFF191D20 : 0xFF141618);
+            border(key, 3.5f, hoverKey ? 0xFF3D6D96 : 0xFF23272A);
+            text(section.binding(), key.x() + 6, centerY, Face.REGULAR, SZ_CHIP,
+                    hoverKey ? ACCENT : 0xFF8E979C, key.width() - 10);
             // Chevron rotates from a right arrow to a down arrow while the section opens.
             float angle = (float) ((1 - section.reveal()) * Math.PI / 2);
             float cos = (float) Math.cos(angle), sin = (float) Math.sin(angle);
@@ -350,7 +366,7 @@ public final class NeverloseRenderer {
             float[] c = rotated(3.2f, -1.6f, cos, sin);
             stroke(cx + a[0], cy + a[1], cx + b[0], cy + b[1], 1.5f, 0xFF65717A);
             stroke(cx + b[0], cy + b[1], cx + c[0], cy + c[1], 1.5f, 0xFF65717A);
-            rounded(new Rect(bounds.x() + 6, bounds.y() + 24, bounds.width() - 6, 1), 0, 0xFF222425);
+            rounded(new Rect(bounds.x() + INSET, bounds.y() + TITLE_LINE, bounds.width() - INSET * 2, 1), 0, 0xFF1D2022);
             clip.push(new Rect(bounds.x(), bounds.y() + SECTION_HEADER, bounds.width(),
                     Math.max(0, bounds.height() - SECTION_HEADER)));
             for (Row row : section.rows()) {
@@ -369,33 +385,43 @@ public final class NeverloseRenderer {
             Rect bounds = row.bounds();
             float centerY = bounds.y() + ROW / 2f;
             if (row.hovered()) {
-                rounded(new Rect(bounds.x(), bounds.y() + 1, bounds.width(), ROW - 2), 3.5f, 0xFF0F1316);
+                rounded(new Rect(bounds.x() + 3, bounds.y() + 1, bounds.width() - 6, ROW - 2), 3.5f, 0x1FFFFFFF);
             }
             if (row.feedback() > .001f) {
-                rounded(new Rect(bounds.x(), bounds.y() + 1, bounds.width(), ROW - 2), 3.5f,
+                rounded(new Rect(bounds.x() + 3, bounds.y() + 1, bounds.width() - 6, ROW - 2), 3.5f,
                         ((int) (row.feedback() * 35) << 24) | (ACCENT & 0xFFFFFF));
             }
             float labelWidth = row.kind() == Kind.BOOLEAN || row.kind() == Kind.ENABLED
-                    ? bounds.width() - 40 : bounds.width() - 128;
-            text(row.label(), bounds.x() + 8, centerY, Face.REGULAR, SZ_LABEL, TEXT, labelWidth);
+                    ? bounds.width() - INSET * 2 - 32 : bounds.width() - INSET * 2 - 118;
+            text(row.label(), bounds.x() + INSET, centerY, Face.REGULAR, SZ_LABEL, TEXT, labelWidth);
             switch (row.kind()) {
                 case BOOLEAN, ENABLED -> {
-                    float p = row.progress(), x = bounds.right() - 29;
-                    rounded(new Rect(x, centerY - 6, 28, 12), 6, blend(0xFF111518, 0xFF0B2537, p));
-                    circle(x + 6 + p * 16, centerY, 8.5f, ((int) (p * 24) << 24) | (ACCENT & 0xFFFFFF));
-                    circle(x + 6 + p * 16, centerY, 5.5f, blend(0xFF586168, ACCENT, p));
+                    // Pill switch: 28x14, no outline (the reference has none), white knob that
+                    // nearly fills the track.
+                    float p = row.progress();
+                    Rect track = new Rect(bounds.right() - INSET - 28, centerY - 7, 28, 14);
+                    rounded(track, 7, blend(0xFF2C3135, 0xFF2E74C9, p));
+                    float knobX = track.x() + 7 + p * (track.width() - 14);
+                    circle(knobX, centerY, 6.6f, 0x33000000);
+                    circle(knobX, centerY, 6f, 0xFFFFFFFF);
                 }
                 case NUMBER -> {
                     Rect track = slider(bounds);
                     float knob = track.x() + track.width() * row.progress();
-                    rounded(new Rect(track.x(), centerY - 1, track.width(), 2), 1, 0xFF333A40);
-                    rounded(new Rect(track.x(), centerY - 1, Math.max(0, knob - track.x()), 2), 1, 0xFF286090);
-                    circle(knob, centerY, 8, ((int) (row.feedback() * 28) << 24) | (ACCENT & 0xFFFFFF));
-                    circle(knob, centerY, 5.4f + row.feedback() * .8f, ACCENT);
+                    rounded(new Rect(track.x(), centerY - 1.5f, track.width(), 3), 1.5f, 0xFF262A2E);
+                    rounded(new Rect(track.x(), centerY - 1.5f, Math.max(0, knob - track.x()), 3), 1.5f,
+                            0xFFDCE3E7);
+                    if (row.feedback() > .001f) {
+                        circle(knob, centerY, 7.5f, ((int) (row.feedback() * 60) << 24) | (ACCENT & 0xFFFFFF));
+                    }
+                    circle(knob, centerY, 5.4f, 0x88000000);
+                    circle(knob, centerY, 4.4f, 0xFFFFFFFF);
                     Rect number = valueBox(bounds);
-                    rounded(number, 2.5f, row.editing() ? 0xFF16202A : 0xFF0E1113);
-                    if (row.editing()) {
-                        border(number, 2.5f, 0xFF3A6E97);
+                    // The reference prints the number as plain text; the box only materialises on
+                    // hover / while editing, so the row keeps its airy look.
+                    if (row.editing() || row.hovered()) {
+                        rounded(number, 3, row.editing() ? 0xFF161A1D : 0x14FFFFFF);
+                        border(number, 3, row.editing() ? 0xFF3A6E97 : 0x1FFFFFFF);
                     }
                     FontRenderer font = Face.REGULAR.of(SZ_VALUE, this.rasterScale);
                     float width = GlHelper.getStringWidth(row.value(), font);
@@ -412,13 +438,14 @@ public final class NeverloseRenderer {
         }
 
         void field(Rect bounds, String value, boolean hover) {
-            rounded(bounds, 3, hover ? 0xFF11171D : 0xFF0B0C0D);
-            border(bounds, 3, hover ? 0xFF2B4B65 : 0xFF1E2225);
-            text(value, bounds.x() + 8, bounds.y() + bounds.height() / 2f, Face.REGULAR, SZ_LABEL, TEXT,
-                    bounds.width() - 26);
+            rounded(bounds, 4, hover ? 0xFF15181B : 0xFF0F1113);
+            border(bounds, 4, hover ? 0xFF3D6D96 : 0xFF23272A);
+            text(value, bounds.x() + 8, bounds.y() + bounds.height() / 2f, Face.REGULAR, SZ_LABEL,
+                    hover ? WHITE : TEXT, bounds.width() - 26);
             float cy = bounds.y() + bounds.height() / 2f;
-            stroke(bounds.right() - 13, cy - 1.8f, bounds.right() - 10, cy + 1.5f, 1.4f, 0xFF8B979F);
-            stroke(bounds.right() - 10, cy + 1.5f, bounds.right() - 7, cy - 1.8f, 1.4f, 0xFF8B979F);
+            int chevron = hover ? 0xFFB9C4CB : 0xFF7C868D;
+            stroke(bounds.right() - 13, cy - 2, bounds.right() - 10, cy + 1.4f, 1.5f, chevron);
+            stroke(bounds.right() - 10, cy + 1.4f, bounds.right() - 7, cy - 2, 1.5f, chevron);
         }
 
         void tooltips(Frame frame) {
@@ -429,7 +456,7 @@ public final class NeverloseRenderer {
                         continue;
                     }
                     float width = row.kind() == Kind.BOOLEAN || row.kind() == Kind.ENABLED
-                            ? row.bounds().width() - 40 : row.bounds().width() - 128;
+                            ? row.bounds().width() - INSET * 2 - 32 : row.bounds().width() - INSET * 2 - 118;
                     if (frame.mouseX() < control(row.bounds()).x()
                             && GlHelper.getStringWidth(row.label(), Face.REGULAR.of(SZ_LABEL, this.rasterScale)) > width) {
                         tooltip(row.label(), frame.mouseX(), frame.mouseY());
@@ -455,8 +482,9 @@ public final class NeverloseRenderer {
 
         void dropdown(Dropdown dropdown) {
             Rect bounds = dropdown.bounds();
-            rounded(bounds, 4.5f, 0xFF12171B);
-            border(bounds, 4.5f, 0xFF2C3C49);
+            shadow(bounds, 4.5f);
+            rounded(bounds, 5, 0xFF101315);
+            border(bounds, 5, 0xFF2A343C);
             clip.push(new Rect(bounds.x() + 3, bounds.y() + 4, bounds.width() - 6,
                     Math.max(0, (bounds.height() - 8) * dropdown.reveal())));
             for (int i = 0; i < dropdown.options().size(); i++) {
@@ -517,11 +545,10 @@ public final class NeverloseRenderer {
                     seg(x, y, 6, 4, 6, 7, s, w, color);
                 }
                 case 4 -> {
-                    quad(x, y, -8, 0, -3, -7, 3, -7, s, w, color);
-                    quad(x, y, 3, -7, 8, 0, 8, 0, s, w, color);
-                    quad(x, y, 8, 0, 3, 7, -3, 7, s, w, color);
-                    quad(x, y, -3, 7, -8, 0, -8, 0, s, w, color);
-                    ring(x, y, 2.5f * s, w, color);
+                    // Eye: two arcs meeting at the corners plus a filled pupil.
+                    cubic(x, y, -7, 0, -3.2f, -6, 3.2f, -6, 7, 0, s, w, color);
+                    cubic(x, y, 7, 0, 3.2f, 6, -3.2f, 6, -7, 0, s, w, color);
+                    circle(x, y, 2.3f * s, color);
                 }
                 case 5 -> {
                     seg(x, y, -6, -6, 6, 6, s, w, color);
@@ -550,20 +577,6 @@ public final class NeverloseRenderer {
 
         private void seg(float x, float y, float x1, float y1, float x2, float y2, float s, float w, int color) {
             stroke(x + x1 * s, y + y1 * s, x + x2 * s, y + y2 * s, w, color);
-        }
-
-        private void quad(float x, float y, float x0, float y0, float cx, float cy, float x1, float y1, float s,
-                          float w, int color) {
-            int steps = 8;
-            float px = x + x0 * s, py = y + y0 * s;
-            for (int i = 1; i <= steps; i++) {
-                float t = (float) i / steps, u = 1 - t;
-                float vx = x + (u * u * x0 + 2 * u * t * cx + t * t * x1) * s;
-                float vy = y + (u * u * y0 + 2 * u * t * cy + t * t * y1) * s;
-                stroke(px, py, vx, vy, w, color);
-                px = vx;
-                py = vy;
-            }
         }
 
         private void cubic(float x, float y, float x0, float y0, float c1x, float c1y, float c2x, float c2y,

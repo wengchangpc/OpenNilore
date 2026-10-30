@@ -10,13 +10,13 @@
 // approach below is sound in isolation, but it loses the launcher's child
 // process. NetEase-style launchers pass -DlauncherControlPort/-DlauncherGameId/
 // -DToken and watch that child, so killing it makes the launcher report "fatal
-// error during startup" and tear the game down. Early Mode is now a plain attach
+// error during startup" and tear the game down. Native Bypass is now a plain attach
 // that happens early (the moment a java process appears) instead; see
 // MainWindow::maybeAutoInject and InjectionOverlay::start.
 
 namespace loader {
 
-// Early Mode.
+// Native Bypass.
 //
 // The DLL only ends up "before" anything the game loads later if we are the one
 // that starts the process: only the creator can touch it while its main thread

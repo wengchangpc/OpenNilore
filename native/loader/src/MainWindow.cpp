@@ -333,17 +333,17 @@ void MainWindow::refreshNow() {
 
     list_->setInstances(filtered);
 
-    // Early Mode triggers off the raw java list, not the windowed one, so say
+    // Native Bypass triggers off the raw java list, not the windowed one, so say
     // what it currently sees: "no java process at all" and "a java process that
     // does not look like Minecraft" are different failures and the loader hid
     // both of them behind the same one-line status.
-    if (loader_settings::is_early_mode_enabled()) {
+    if (loader_settings::is_native_bypass_enabled()) {
         int matching = 0;
         for (const auto& jp : procs) {
             if (is_minecraft_process(jp)) ++matching;
         }
         status_->setText(QStringLiteral(
-                "Early Mode — %1 java process(es) seen, %2 recognised.")
+                "Native Bypass — %1 java process(es) seen, %2 recognised.")
                 .arg((int)procs.size()).arg(matching));
     } else {
         status_->setText(QStringLiteral("Watching %1 Minecraft instance(s).")
@@ -354,11 +354,11 @@ void MainWindow::refreshNow() {
 }
 
 void MainWindow::maybeAutoInject(const std::vector<JavaProcess>& procs) {
-    // Early Mode is an auto path: the user launches the game normally and the
+    // Native Bypass is an auto path: the user launches the game normally and the
     // loader takes the instance over itself, because being "early" means we have
     // to be the one that starts the process (CREATE_SUSPENDED). Nothing happens
     // while the toggle is off.
-    if (!loader_settings::is_early_mode_enabled()) return;
+    if (!loader_settings::is_native_bypass_enabled()) return;
     if (injectionInFlight_) return;
 
     for (const JavaProcess& jp : procs) {
@@ -391,7 +391,7 @@ void MainWindow::notify(const QString& title, const QString& body) {
 
 void MainWindow::onInjectRequested(unsigned long pid, const QString& title,
                                    const QString& commandLine) {
-    // Signal re-entrancy guard: the Early Mode auto-detection fires on every
+    // Signal re-entrancy guard: the Native Bypass auto-detection fires on every
     // newly-seen Minecraft pid. When auto-inject is already in progress
     // (injectionInFlight_), drop the new candidate instead of starting a
     // second overlay / worker thread.
@@ -403,23 +403,23 @@ void MainWindow::onInjectRequested(unsigned long pid, const QString& title,
     list_->setInteractive(false);
     if (timer_) timer_->stop();
 
-    const bool early = loader_settings::is_early_mode_enabled();
+    const bool nativeBypass = loader_settings::is_native_bypass_enabled();
     auto* overlay = new InjectionOverlay(pid, title, commandLine, this);
     connect(overlay, &InjectionOverlay::completed, this,
-            [this, early](bool ok, unsigned long injectedPid) {
+            [this, nativeBypass](bool ok, unsigned long injectedPid) {
         // Ping the injected row so the user sees which pid got the DLL.
         // The 1.4s yellow ring needs a few frames; hold the window briefly
         // (3000ms) before fading out so it is actually visible, then leave.
         if (ok && injectedPid) list_->markInjected(injectedPid);
-        // Remember the pid we just stood up (early mode hands back the new one)
+        // Remember the pid we just stood up (native bypass hands back the new one)
         // so the auto path does not pick it up as a fresh candidate.
         if (injectedPid) earlyHandled_.insert(injectedPid);
-        if (ok && injectedPid && early) {
-            // Green tag on the row + a balloon, so Early Mode leaving a trace is
+        if (ok && injectedPid && nativeBypass) {
+            // Green tag on the row + a balloon, so Native Bypass leaving a trace is
             // not something you have to catch in a 2s animation.
-            list_->markEarlyInjected(injectedPid);
+            list_->markNativeBypassed(injectedPid);
             notify(QStringLiteral("OpenNilore"),
-                   QStringLiteral("Early Mode injected (pid %1, mapped in before the game window)")
+                   QStringLiteral("Native Bypass injected (pid %1, mapped in before the game window)")
                        .arg(injectedPid));
         } else if (ok && injectedPid) {
             notify(QStringLiteral("OpenNilore"),
@@ -428,8 +428,8 @@ void MainWindow::onInjectRequested(unsigned long pid, const QString& title,
             notify(QStringLiteral("OpenNilore"),
                    QStringLiteral("Injection failed"));
         }
-        if (early) {
-            // Early Mode keeps watching instead of quitting: the instance we just
+        if (nativeBypass) {
+            // Native Bypass keeps watching instead of quitting: the instance we just
             // restarted only reappears in the list a few seconds later, and that
             // row (with its green tag) is the whole point of the feedback. It
             // also means a later launch gets taken over without restarting the

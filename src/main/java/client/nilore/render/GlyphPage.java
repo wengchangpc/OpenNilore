@@ -13,9 +13,12 @@ import java.awt.geom.AffineTransform;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.awt.image.ColorModel;
+import java.awt.image.DataBufferInt;
 import java.awt.image.WritableRaster;
+import java.lang.reflect.Field;
 import java.nio.IntBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.BitSet;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.resources.ResourceLocation;
@@ -57,6 +60,13 @@ class GlyphPage {
     private NativeImage nativeImage;
     private DynamicTexture texture;
     private long pixelsPtr;
+    /** Set when the atlas gained pixels; the mipmap chain is rebuilt once per draw instead of
+     *  once per glyph, which is what used to cost milliseconds on the first Chinese glyphs. */
+    private boolean mipmapDirty;
+    /** Resolved once — every glyph used to walk NativeImage's field table through reflection. */
+    private static volatile Field pixelsField;
+    private static volatile boolean pixelsFieldUnavailable;
+    private static final String NATIVE_IMAGE_CLASS = "com/mojang/blaze3d/platform/NativeImage";
 
     public GlyphPage(char startChar, char endChar, Font font, ResourceLocation textureLocation, int padding) {
         this(startChar, endChar, font, textureLocation, padding, 0, null);
@@ -116,6 +126,7 @@ class GlyphPage {
         this.imageWidth = -1;
         this.imageHeight = -1;
         this.uploaded = false;
+        this.mipmapDirty = false;
     }
 
     public boolean contains(char c) {
@@ -196,9 +207,8 @@ class GlyphPage {
     private void createTexture() {
         try {
             this.nativeImage = new NativeImage(NativeImage.Format.RGBA, this.imageWidth, this.imageHeight, false);
-            this.pixelsPtr = (Long)ReflectionUtil.getStaticField(this.nativeImage, "pixels",
-                    "com/mojang/blaze3d/platform/NativeImage");
-            GlyphPage.fillBackground(this.nativeImage);
+            this.pixelsPtr = pixelsPointer(this.nativeImage);
+            GlyphPage.fillBackground(this.nativeImage, this.pixelsPtr);
             this.texture = new DynamicTexture(this.nativeImage);
             RenderSystem.bindTexture(this.texture.getId());
             GL11.glTexParameteri(3553, 10241, 9729); // GL_TEXTURE_MIN_FILTER = GL_LINEAR
@@ -207,10 +217,32 @@ class GlyphPage {
                 GL11.glTexParameteri(3553, 33085, 4); // GL_TEXTURE_MAX_LEVEL
                 GL11.glTexParameteri(3553, 33083, 4); // GL_TEXTURE_MAX_LOD
             }
+            this.texture.setFilter(true, !this.hinted);
             ClientBase.mc.getTextureManager().register(this.textureLocation, this.texture);
         } catch (Throwable throwable) {
             throwable.printStackTrace();
         }
+    }
+
+    private static long pixelsPointer(NativeImage image) {
+        Field field = pixelsField;
+        if (field == null && !pixelsFieldUnavailable) {
+            try {
+                field = NativeImage.class.getDeclaredField("pixels");
+                field.setAccessible(true);
+                pixelsField = field;
+            } catch (Throwable throwable) {
+                pixelsFieldUnavailable = true;
+            }
+        }
+        if (field != null) {
+            try {
+                return field.getLong(image);
+            } catch (Throwable ignored) {
+                pixelsFieldUnavailable = true;
+            }
+        }
+        return (Long)ReflectionUtil.getStaticField(image, "pixels", NATIVE_IMAGE_CLASS);
     }
 
     private void rasterizeGlyph(Glyph glyph) {
@@ -235,9 +267,8 @@ class GlyphPage {
             this.writeRegion(glyph.u(), glyph.v(), width, height);
             this.texture.bind();
             this.nativeImage.upload(0, glyph.u(), glyph.v(), glyph.u(), glyph.v(), width, height, false, false);
-            this.texture.setFilter(true, !this.hinted);
             if (!this.hinted) {
-                GL30.glGenerateMipmap(3553);
+                this.mipmapDirty = true;
             }
             this.rasterized.set(glyph.value() - this.startChar);
         } catch (Throwable throwable) {
@@ -245,9 +276,53 @@ class GlyphPage {
         }
     }
 
+    /**
+     * Rebuilds the mipmap chain if this page gained pixels since the last rebuild.
+     *
+     * <p>Cheaper than the old per-glyph {@code glGenerateMipmap}: a page that receives twenty
+     * new characters in one draw now pays for one chain rebuild instead of twenty.
+     */
+    void flushMipmap() {
+        if (!this.mipmapDirty || this.texture == null) {
+            return;
+        }
+        this.mipmapDirty = false;
+        this.texture.bind();
+        GL30.glGenerateMipmap(3553);
+    }
+
     private void writeRegion(int x, int y, int width, int height) {
-        IntBuffer intBuffer = MemoryUtil.memIntBuffer(this.pixelsPtr,
-                this.nativeImage.getWidth() * this.nativeImage.getHeight());
+        int dstWidth = this.nativeImage.getWidth();
+        IntBuffer intBuffer = MemoryUtil.memIntBuffer(this.pixelsPtr, dstWidth * this.nativeImage.getHeight());
+        int srcWidth = this.atlasImage.getWidth();
+        int srcHeight = this.atlasImage.getHeight();
+        if (x >= 0 && y >= 0
+                && this.atlasImage.getRaster().getDataBuffer() instanceof DataBufferInt buffer
+                && buffer.getNumBanks() == 1
+                && this.atlasImage.getRaster().getSampleModelTranslateX() == 0
+                && this.atlasImage.getRaster().getSampleModelTranslateY() == 0) {
+            int[] pixels = buffer.getData();
+            int cols = Math.min(width, srcWidth - x);
+            for (int row = 0; row < height; ++row) {
+                int srcY = y + row;
+                if (srcY >= srcHeight) break;
+                int srcBase = srcY * srcWidth + x;
+                int dstBase = srcY * dstWidth + x;
+                for (int col = 0; col < cols; ++col) {
+                    int argb = pixels[srcBase + col];
+                    intBuffer.put(dstBase + col,
+                            (argb & 0xFF000000)
+                                    | ((argb & 0xFF) << 16)
+                                    | (argb & 0xFF00)
+                                    | ((argb >>> 16) & 0xFF));
+                }
+            }
+            return;
+        }
+        this.writeRegionSlow(x, y, width, height, intBuffer);
+    }
+
+    private void writeRegionSlow(int x, int y, int width, int height, IntBuffer intBuffer) {
         WritableRaster raster = this.atlasImage.getRaster();
         ColorModel colorModel = this.atlasImage.getColorModel();
         int numBands = raster.getNumBands();
@@ -260,12 +335,13 @@ class GlyphPage {
             case 5 -> new double[numBands];
             default -> throw new IllegalArgumentException("Unknown data buffer type: " + dataType);
         };
+        int dstWidth = this.nativeImage.getWidth();
         for (int row = 0; row < height; ++row) {
             int srcY = y + row;
             if (srcY < 0 || srcY >= this.atlasImage.getHeight()) {
                 continue;
             }
-            int rowBase = srcY * this.nativeImage.getWidth();
+            int rowBase = srcY * dstWidth;
             for (int col = 0; col < width; ++col) {
                 int srcX = x + col;
                 if (srcX < 0 || srcX >= this.atlasImage.getWidth()) {
@@ -285,12 +361,16 @@ class GlyphPage {
      * Fills the atlas with an almost transparent white wash so bilinear sampling at
      * glyph edges never bleeds the fully transparent black of unset pixels.
      */
-    private static void fillBackground(NativeImage image) {
-        long pixelsPtr = (Long)ReflectionUtil.getStaticField(image, "pixels", "com/mojang/blaze3d/platform/NativeImage");
+    private static void fillBackground(NativeImage image, long pixelsPtr) {
         int count = image.getWidth() * image.getHeight();
         IntBuffer intBuffer = MemoryUtil.memIntBuffer(pixelsPtr, count);
-        for (int i = 0; i < count; ++i) {
-            intBuffer.put(i, 0x01FFFFFF);
+        int[] chunk = new int[Math.min(count, 4096)];
+        Arrays.fill(chunk, 0x01FFFFFF);
+        int written = 0;
+        while (written < count) {
+            int length = Math.min(chunk.length, count - written);
+            intBuffer.put(chunk, 0, length);
+            written += length;
         }
     }
 }

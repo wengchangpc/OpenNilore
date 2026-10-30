@@ -81,7 +81,7 @@ void InjectionOverlay::start() {
     // overlay stays animated. Use invokeMethod with a queued connection to
     // bounce the result back to the GUI thread.
     //
-    // Early Mode (default OFF) is about WHEN, not HOW: the loader's watcher fires
+    // Native Bypass (default OFF) is about WHEN, not HOW: the loader's watcher fires
     // it the second a java process appears (see MainWindow::maybeAutoInject), so
     // the DLL is already mapped in while the JVM is still coming up - long before
     // the game window, which is where the old window-driven trigger used to wait.

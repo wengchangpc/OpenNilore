@@ -20,6 +20,7 @@ extends ClientBase {
     public static void registerStyles() {
         styleRegistry.put(OpalNameTag.class, new OpalNameTag());
         styleRegistry.put(SimpleNameTag.class, new SimpleNameTag());
+        styleRegistry.put(NavenNameTag.class, new NavenNameTag());
     }
 
     public static NameTagStyle getByName(String string) {

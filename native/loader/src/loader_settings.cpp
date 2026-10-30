@@ -90,14 +90,16 @@ bool is_hwid_spoof_enabled() {
     return v.isValid() && v.toBool();
 }
 
-bool is_syscall_thread_enabled() {
-    QVariant v = load_all().value(kKeySyscallThread());
-    return v.isValid() && v.toBool();
-}
-
-bool is_early_mode_enabled() {
-    QVariant v = load_all().value(kKeyEarlyMode());
-    return v.isValid() && v.toBool();
+bool is_native_bypass_enabled() {
+    // 老配置里这个开关叫 earlyMode：先读新键，没写过就沿用旧值，免得升级后
+    // 用户的勾选状态凭空消失（旧键不再写回，下次保存时自然被新键取代）。
+    QHash<QString, QVariant> all = load_all();
+    QVariant v = all.value(kKeyNativeBypass());
+    if (v.isValid()) {
+        return v.toBool();
+    }
+    QVariant legacy = all.value(kKeyLegacyEarlyMode());
+    return legacy.isValid() && legacy.toBool();
 }
 
 QString hwid_custom_value(const QString& key) {

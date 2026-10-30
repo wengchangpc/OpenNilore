@@ -38,9 +38,6 @@ SettingsPage::SettingsPage(QWidget* parent)
 bool SettingsPage::hwidSpoofEnabled() const {
     return hwidSwitch_ && hwidSwitch_->isChecked();
 }
-bool SettingsPage::syscallThreadEnabled() const {
-    return syscallSwitch_ && syscallSwitch_->isChecked();
-}
 
 QWidget* SettingsPage::makeToggleRow(const QString& name, const QString& desc,
                                      PillSwitch* sw, QWidget* parent) {
@@ -88,35 +85,23 @@ void SettingsPage::buildUi() {
                        "serial, MAC, computer name). Default OFF."),
         hwidSwitch_, this));
 
-    // ---- Syscall Thread (default OFF) ----
-    syscallSwitch_ = new PillSwitch(this);
-    syscallSwitch_->setChecked(loader_settings::is_syscall_thread_enabled());
-    connect(syscallSwitch_, &PillSwitch::toggled, this, [](bool on) {
-        loader_settings::save_value(loader_settings::kKeySyscallThread(), on);
-    });
-    col->addWidget(makeToggleRow(
-        QStringLiteral("Syscall Thread"),
-        QStringLiteral("Use NtCreateThreadEx instead of CreateRemoteThread for "
-                       "injection. Default OFF."),
-        syscallSwitch_, this));
-
-    // Early Mode: instead of attaching to the running instance, restart it from
+    // Native Bypass: instead of attaching to the running instance, restart it from
     // its own command line with CREATE_SUSPENDED, map the DLL in while the main
     // thread is still frozen, then resume. Nothing the game loads afterwards
     // (an anti-cheat's loader included) can run before the DLL is resident.
-    earlySwitch_ = new PillSwitch(this);
-    earlySwitch_->setChecked(loader_settings::is_early_mode_enabled());
-    connect(earlySwitch_, &PillSwitch::toggled, this, [](bool on) {
-        loader_settings::save_value(loader_settings::kKeyEarlyMode(), on);
+    nativeBypassSwitch_ = new PillSwitch(this);
+    nativeBypassSwitch_->setChecked(loader_settings::is_native_bypass_enabled());
+    connect(nativeBypassSwitch_, &PillSwitch::toggled, this, [](bool on) {
+        loader_settings::save_value(loader_settings::kKeyNativeBypass(), on);
     });
     col->addWidget(makeToggleRow(
-        QStringLiteral("Early Mode"),
+        QStringLiteral("Native Bypass"),
         QStringLiteral("Auto: as soon as a Minecraft instance shows up, restart "
                        "it suspended from its own command line, map the DLL in "
                        "before it resumes, then let it go. The game window reopens "
                        "and you rejoin the server. Clicking Inject does the same "
                        "on demand. Default OFF."),
-        earlySwitch_, this));
+        nativeBypassSwitch_, this));
 
     col->addStretch(1);
 }

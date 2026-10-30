@@ -88,8 +88,18 @@ public final class ClassAgent {
         if (retransform.isEmpty()) {
             return;
         }
-        // Retransform one class at a time so we can pinpoint which patch produces invalid
-        // bytecode if the JVM throws VerifyError / LinkageError.
+        // A single batched call redefines every target inside one safepoint, so the VM pays for
+        // one deoptimisation wave instead of one per class. Per-class retransform is kept as a
+        // fallback: it is the only way to pinpoint which patch produced invalid bytecode.
+        long start = System.nanoTime();
+        try {
+            inst.retransformClasses(retransform.toArray(new Class<?>[0]));
+            LOGGER.info("Retransformed {} patch target(s) in {} ms (batched)",
+                    retransform.size(), (System.nanoTime() - start) / 1_000_000L);
+            return;
+        } catch (Throwable batchFailure) {
+            LOGGER.warn("Batched retransform rejected ({}), retrying per class", batchFailure.toString());
+        }
         int success = 0;
         for (Class<?> target : retransform) {
             try {
@@ -99,6 +109,7 @@ public final class ClassAgent {
                 LOGGER.error("Retransform failed for {}: {}", target.getName(), t.toString());
             }
         }
-        LOGGER.info("Retransformed {} / {} patch target(s)", success, retransform.size());
+        LOGGER.info("Retransformed {} / {} patch target(s) in {} ms",
+                success, retransform.size(), (System.nanoTime() - start) / 1_000_000L);
     }
 }

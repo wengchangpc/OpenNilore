@@ -5,13 +5,35 @@ import java.io.InputStream;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import client.nilore.ClientBase;
 import client.nilore.utils.misc.Assets;
 
 public final class Fonts {
     private static final Map<String, FontRenderer> fontRendererCache = new HashMap<>();
     private static final Map<String, CustomFont> customFontCache = new HashMap<>();
-    private static final Map<String, Font> awtFontCache = new HashMap<>();
+    /** Concurrent: the preload thread fills it while the render thread reads it. */
+    private static final Map<String, Font> awtFontCache = new ConcurrentHashMap<>();
+    private static final Set<String> awtFontMissing = ConcurrentHashMap.newKeySet();
+    private static final Object AWT_LOCK = new Object();
+
+    /**
+     * Font files touched by the default HUD / ClickGUI. Parsing them is the expensive part
+     * (pingfang is 11 MB), so a background thread does it while the client is still installing
+     * patches instead of on the first text draw.
+     */
+    private static final String[] PRELOAD_FONTS = {
+            "pingfang_sc_regular.ttf",
+            "Poppins-Regular.ttf",
+            "Poppins-Medium.ttf",
+            "Poppins-Bold.ttf",
+            "product_sans_regular.ttf",
+            "quicksand.ttf",
+            "MaterialIcons-Regular.ttf",
+            "niloreicon-Regular.ttf",
+            "AstaSans-Medium.ttf"
+    };
 
     private static final int MAX_RASTER_VARIANTS = 24;
     private static final Map<String, CustomFont> scaledFontCache = new LinkedHashMap<>(16, 0.75f, true) {
@@ -87,12 +109,12 @@ public final class Fonts {
             return customFont;
         }
         try {
-            Font font = awtFontCache.computeIfAbsent(name, Fonts::loadAwtFont);
+            Font font = awtFont(name);
             if (font == null) return null;
             // 主字体自己就是中文字体时不用兜底，省一份字形图集
             Font[] fallbacks = new Font[0];
             if (!CJK_FALLBACK.equals(name)) {
-                Font cjk = awtFontCache.computeIfAbsent(CJK_FALLBACK, Fonts::loadAwtFont);
+                Font cjk = awtFont(CJK_FALLBACK);
                 if (cjk != null) {
                     fallbacks = new Font[]{cjk};
                 }
@@ -104,6 +126,44 @@ public final class Fonts {
         } catch (Exception exception) {
             exception.printStackTrace();
             return null;
+        }
+    }
+
+    public static void preloadFontsAsync() {
+        Thread thread = new Thread(() -> {
+            for (String name : PRELOAD_FONTS) {
+                try {
+                    awtFont(name);
+                } catch (Throwable ignored) {
+                    // A missing or unreadable font is not fatal; the call sites fall back.
+                }
+            }
+        }, "Nilore-Font-Preload");
+        thread.setDaemon(true);
+        thread.setPriority(Math.max(Thread.MIN_PRIORITY, Thread.NORM_PRIORITY - 1));
+        thread.start();
+    }
+
+    private static Font awtFont(String name) {
+        Font cached = awtFontCache.get(name);
+        if (cached != null) {
+            return cached;
+        }
+        if (awtFontMissing.contains(name)) {
+            return null;
+        }
+        synchronized (AWT_LOCK) {
+            cached = awtFontCache.get(name);
+            if (cached != null) {
+                return cached;
+            }
+            Font loaded = loadAwtFont(name);
+            if (loaded == null) {
+                awtFontMissing.add(name);
+            } else {
+                awtFontCache.put(name, loaded);
+            }
+            return loaded;
         }
     }
 

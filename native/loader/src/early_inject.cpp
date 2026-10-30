@@ -41,12 +41,12 @@ std::wstring image_path_of(DWORD pid) {
 std::wstring inject_early(DWORD existing_pid, const std::wstring& command_line,
                           DWORD& out_new_pid) {
     if (existing_pid == 0 || command_line.empty()) {
-        return L"Early Mode: no instance command line to relaunch from";
+        return L"Native Bypass: no instance command line to relaunch from";
     }
 
     std::wstring image = image_path_of(existing_pid);
     if (image.empty()) {
-        return format_error(L"Early Mode: QueryFullProcessImageName", GetLastError());
+        return format_error(L"Native Bypass: QueryFullProcessImageName", GetLastError());
     }
 
     // The game's working directory is part of how it finds its own files; read
@@ -68,7 +68,7 @@ std::wstring inject_early(DWORD existing_pid, const std::wstring& command_line,
     if (cwd.empty()) {
         // Relaunching without it gives a game sitting in the wrong directory: it
         // starts and then dies. Keep the instance the user has instead.
-        return L"Early Mode: could not read the instance working directory "
+        return L"Native Bypass: could not read the instance working directory "
                L"(process may be protected); not relaunching into a wrong one";
     }
 
@@ -93,7 +93,7 @@ std::wstring inject_early(DWORD existing_pid, const std::wstring& command_line,
                         CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
                         env.empty() ? nullptr : env.data(),
                         cwd.c_str(), &si, &pi)) {
-        return format_error(L"Early Mode: CreateProcess(CREATE_SUSPENDED)",
+        return format_error(L"Native Bypass: CreateProcess(CREATE_SUSPENDED)",
                             GetLastError());
     }
 
@@ -107,7 +107,7 @@ std::wstring inject_early(DWORD existing_pid, const std::wstring& command_line,
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
         out_new_pid = 0;
-        return L"Early Mode: inject into suspended process failed: " + err;
+        return L"Native Bypass: inject into suspended process failed: " + err;
     }
 
     // Injection is in. Now it is safe to retire the old instance (overlapping
@@ -125,7 +125,7 @@ std::wstring inject_early(DWORD existing_pid, const std::wstring& command_line,
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
         out_new_pid = pi.dwProcessId;
-        return format_error(L"Early Mode: ResumeThread", code);
+        return format_error(L"Native Bypass: ResumeThread", code);
     }
 
     out_new_pid = pi.dwProcessId;

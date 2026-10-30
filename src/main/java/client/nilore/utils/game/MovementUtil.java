@@ -11,8 +11,6 @@ import net.minecraft.world.phys.Vec3;
 import client.nilore.ClientBase;
 import client.nilore.event.impl.StrafeEvent;
 import client.nilore.modules.impl.movement.TargetStrafe;
-import client.nilore.utils.game.RotationUtil;
-import client.nilore.utils.rotation.Rotation;
 
 public final class MovementUtil
 extends ClientBase {
@@ -116,16 +114,26 @@ extends ClientBase {
     public static void handleStrafe(StrafeEvent strafeEvent, float partialTicks) {
         float forward = strafeEvent.getForward();
         float strafe = strafeEvent.getStrafe();
-        float yaw = mc.player.getYRot();
-        if (TargetStrafe.strafeTarget != null && TargetStrafe.INSTANCE.isEnabled() && (!TargetStrafe.isSmartStrafe() || mc.options.keyJump.isDown())) {
-            float yawOffset = (float)(MovementUtil.getBaseSpeed() / ((double)TargetStrafe.getRange() * Math.PI * 2.0) * 360.0) * (float)TargetStrafe.strafeDirectionSign;
-            Rotation rotation = RotationUtil.rotationToForBow(new Vec3(TargetStrafe.strafeTarget.getX(), TargetStrafe.strafeTarget.getY(), TargetStrafe.strafeTarget.getZ()), new Vec3(mc.player.getX(), mc.player.getY(), mc.player.getZ()));
-            rotation.setYaw(rotation.getYaw() + yawOffset);
-            float yawRad = rotation.getYaw() * ((float)Math.PI / 180);
-            double circleX = TargetStrafe.strafeTarget.getX() - Math.sin(yawRad) * (double)TargetStrafe.getRange();
-            double circleZ = TargetStrafe.strafeTarget.getZ() + Math.cos(yawRad) * (double)TargetStrafe.getRange();
-            yaw = (float)Math.toDegrees(RotationUtil.rotationToForBow(new Vec3(mc.player.getX(), mc.player.getY(), mc.player.getZ()), new Vec3(circleX, TargetStrafe.strafeTarget.getY(), circleZ)).getYaw() * ((float)Math.PI / 180));
+        if (TargetStrafe.isOrbiting()) {
+            // 绕圈期间不再要求玩家按着方向键：按住跳键就是要贴住对面转，输入由模块接管。
+            // 以前这里在 forward==0 && strafe==0 时直接返回，手一松就没人改输入，
+            // 看起来就是"不粘着对面、时不时脱手"。
+            // 半径步进是本 tick 才算出来的，没开 CollisionSpeed 时没有别的调用方，这里先触发。
+            TargetStrafe.ensureOrbitComputed();
+            // 只写 8 方向里的整数组合。
+            //
+            // 绕圈不是靠"把输入掰成任意角度"实现的：静默旋转已经把发包 yaw 指向目标，
+            // 输入取横移 (0, ±1) 时世界移动方向就是这条 yaw 的 ±90°，也就是绕目标的切向。
+            // 需要收/放半径时再带一个 forward（45°）。
+            //
+            // 之前这里写的是连续角 (cos, sin)：向量长度虽然还是 1，但方向不是 8 方向之一，
+            // Grim 的 Simulation 反推输入时会得出不存在的按键组合，于是每 tick 报偏移 ——
+            // 这就是"没开 CollisionSpeed 也爆模拟"的原因。
+            strafeEvent.setForward(TargetStrafe.radialStep());
+            strafeEvent.setStrafe(TargetStrafe.strafeSign());
+            return;
         }
+        float yaw = mc.player.getYRot();
         double targetDirection = Mth.wrapDegrees(Math.toDegrees(MovementUtil.getDirectionYaw(yaw, forward, strafe)));
         if (forward == 0.0f && strafe == 0.0f) {
             return;

@@ -162,7 +162,7 @@ public final class NeverloseClickGui extends Screen {
             List<Setting<?>> values = visibleSettings(module);
             settings.add(values);
             float reveal = state.motion.to(state.expanded ? 1 : 0, time);
-            heights.add(SECTION_HEADER + (values.size() + 1) * ROW * reveal);
+            heights.add(SECTION_HEADER + (values.size() + 1) * ROW * reveal + CARD_PAD);
         }
         if (!visible.equals(packedModules)) {
             packedModules = visible;
@@ -338,7 +338,7 @@ public final class NeverloseClickGui extends Screen {
         commitEditing();
         setMouse(mouseX, mouseY);
         refresh(now());
-        if (popup != null) {
+        if (popup != null && popup.open) {
             if (popupClick()) {
                 return true;
             }
@@ -799,7 +799,10 @@ public final class NeverloseClickGui extends Screen {
 
     @Override
     public boolean charTyped(char codePoint, int modifiers) {
-        if (closing || binding != null || popup != null) {
+        // Only an *open* dropdown may swallow input. The popup object stays alive after it is
+        // closed, so testing for null here silently killed the search field for the rest of the
+        // session once any dropdown had been opened.
+        if (closing || binding != null || (popup != null && popup.open)) {
             return true;
         }
         if (editing != null) {

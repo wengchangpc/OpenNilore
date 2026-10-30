@@ -37,7 +37,15 @@ extends Setting<String> {
 
     @Override
     public void load(JsonElement jsonElement) {
-        this.setValue(jsonElement.getAsString());
+        String loaded = jsonElement.getAsString();
+        for (String mode : this.modes) {
+            if (mode.equals(loaded)) {
+                this.setValue(loaded);
+                return;
+            }
+        }
+        // An option that no longer exists (renamed or removed) is dropped instead of adopted:
+        // keeping it would leave the owner comparing against a branch that can never be taken.
     }
 
     }

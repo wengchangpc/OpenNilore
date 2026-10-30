@@ -666,6 +666,18 @@ public class Scaffold extends Module {
 
     private void calculateTargetRotation() {
         if (this.currentPlacement == null || mc.player == null) return;
+
+        // 不转优先: 上一次真正下发的朝向如果已经打中本 tick 的目标放置面(方块 + 面都对得上),
+        // 这一 tick 就完全不动 rotation —— rots / targetRotation 保持上一 tick 的值, 出站角
+        // 逐位相同, 服务端看到的转头增量是 0。
+        // 因果反过来: 让放置去适配朝向, 而不是朝向去追放置。转头只在"目标面换了"或
+        // "原朝向确实打不到了"时才发生, 这已经是最少的转头次数。
+        Rotation held = RotationHandler.targetRotation;
+        if (held != null && RayTraceUtil.canRayTrace(
+                held, this.currentPlacement.facing, this.currentPlacement.position, true)) {
+            return;
+        }
+
         // 每 tick 一次机会: 预算在搜索开始时重置, 由 isRotationValidForPlacement 逐次扣减。
         this.raycastBudget = ROTATION_RAYCAST_BUDGET;
 

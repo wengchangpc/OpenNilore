@@ -91,7 +91,7 @@ void InstanceList::setInstances(const QVector<Instance>& list) {
         r->deleteLater();
         // Windows recycles pids; dropping the flag with the row keeps the badge
         // from showing up on an unrelated process later.
-        earlyInjected_.remove(pid);
+        nativeBypassed_.remove(pid);
     }
 
     // Note is index 0; rows start at index 1 so they sit below the note and
@@ -106,7 +106,7 @@ void InstanceList::setInstances(const QVector<Instance>& list) {
             rows_.insert(it.pid, r);
             containerLayout_->insertWidget(i + 1, r);
             r->playEntrance();
-            if (earlyInjected_.contains(it.pid)) r->setEarlyInjected(true);
+            if (nativeBypassed_.contains(it.pid)) r->setNativeBypassed(true);
         } else {
             r->updateTitle(it.title);
             int currentIndex = containerLayout_->indexOf(r);
@@ -137,10 +137,10 @@ void InstanceList::markInjected(unsigned long pid) {
     }
 }
 
-void InstanceList::markEarlyInjected(unsigned long pid) {
-    earlyInjected_.insert(pid);
+void InstanceList::markNativeBypassed(unsigned long pid) {
+    nativeBypassed_.insert(pid);
     if (auto* r = rows_.value(pid, nullptr)) {
-        r->setEarlyInjected(true);
+        r->setNativeBypassed(true);
     }
 }
 

@@ -229,11 +229,15 @@ public class BetterChat extends Module {
         }
 
         PoseStack pose = graphics.pose();
-        float radius = this.backgroundRadius.getValue().floatValue();
+        // The box below is laid out in GUI pixels that already carry the chat scale (line count and
+        // width are both multiplied by it), so the radii have to carry it too. Otherwise every
+        // chat scale except 1 draws corners that are too tight for the box they sit on, and the
+        // glow ring stops being concentric with the fill.
+        float radius = this.backgroundRadius.getValue().floatValue() * scale;
 
         if (this.glowEnabled.getValue()) {
             int alpha = this.glowAlpha.getValue().intValue();
-            float glowRadius = this.glowRadius.getValue().floatValue();
+            float glowRadius = this.glowRadius.getValue().floatValue() * scale;
             if (alpha > 0 && glowRadius > 0.0f) {
                 RoundedRectShader shader = DrawContext.getRoundedRectShader();
                 shader.drawGlow(pose.last().pose(), left, top, right, bottom,
@@ -245,7 +249,7 @@ public class BetterChat extends Module {
             float opacity = this.blurOpacity.getValue().floatValue();
             if (opacity > 0.0f) {
                 RenderUtil.drawBlurredRect(pose, left, top, right - left, bottom - top, radius,
-                        this.blurStrength.getValue().floatValue(), opacity, 0);
+                        this.blurStrength.getValue().floatValue() * scale, opacity, 0);
             }
         }
         if (this.backgroundEnabled.getValue()) {
