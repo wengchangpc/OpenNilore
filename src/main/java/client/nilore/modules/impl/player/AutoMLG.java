@@ -3,10 +3,8 @@ package client.nilore.modules.impl.player;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.InteractionHand;
-import net.minecraft.world.item.Item;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.ClipContext;
-import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.level.material.Fluids;
@@ -26,9 +24,6 @@ import client.nilore.event.EventTarget;
 public class AutoMLG
 extends Module {
     public static AutoMLG INSTANCE;
-    /** 一次回收最多维持多少 tick（3 秒）。超时只可能是射线一直被挡/水在视线外。 */
-    private static final int RECOVERY_TIMEOUT = 60;
-
     private final NumberSetting triggerDistanceSetting = new NumberSetting("Fall distance", 3, 1.0f, 10.0f, 0.1f);
     private final NumberSetting predictTicksSetting = new NumberSetting("Predict Ticks", 2, 1.0f, 5.0f, 1.0f);
     private final BooleanSetting solidCheckSetting = new BooleanSetting("Solid check", true);
@@ -40,12 +35,13 @@ extends Module {
     private boolean waterPlaced;
     private boolean recoveryActive;
     private int recoveryDelay;
-    private int recoveryTicks;
+    private int recoveryCountdown;
     private Integer waterBucketSlot;
     private BlockPos placedWaterPos;
     private boolean readyToPlace;
     private int postPlaceCooldown;
     private int postActionCooldown;
+    private int extraCooldown;
 
     public AutoMLG() {
         super("AutoMLG", Category.PLAYER);
@@ -58,12 +54,13 @@ extends Module {
         this.waterPlaced = false;
         this.recoveryActive = false;
         this.recoveryDelay = 0;
-        this.recoveryTicks = 0;
+        this.recoveryCountdown = 0;
         this.waterBucketSlot = null;
         this.placedWaterPos = null;
         this.readyToPlace = false;
         this.postPlaceCooldown = 0;
         this.postActionCooldown = 0;
+        this.extraCooldown = 0;
         this.accumulatedFall = 0.0f;
         this.lastY = mc.player != null ? mc.player.getY() : 0.0;
         super.onEnable();
@@ -75,12 +72,13 @@ extends Module {
         this.waterPlaced = false;
         this.recoveryActive = false;
         this.recoveryDelay = 0;
-        this.recoveryTicks = 0;
+        this.recoveryCountdown = 0;
         this.waterBucketSlot = null;
         this.placedWaterPos = null;
         this.readyToPlace = false;
         this.postPlaceCooldown = 0;
         this.postActionCooldown = 0;
+        this.extraCooldown = 0;
         this.accumulatedFall = 0.0f;
         super.onDisable();
     }
@@ -119,6 +117,9 @@ extends Module {
         if (this.postActionCooldown > 0) {
             --this.postActionCooldown;
         }
+        if (this.extraCooldown > 0) {
+            --this.extraCooldown;
+        }
         if (this.slotToRestore != null) {
             mc.player.getInventory().selected = this.slotToRestore;
             this.slotToRestore = null;
@@ -128,7 +129,55 @@ extends Module {
             this.readyToPlace = false;
         }
         if (this.recoveryActive) {
-            this.tickRecovery();
+            if (this.recoveryDelay > 0) {
+                --this.recoveryDelay;
+                return;
+            }
+            if (this.recoveryCountdown-- <= 0) {
+                this.recoveryActive = false;
+                this.waterBucketSlot = null;
+                this.placedWaterPos = null;
+                return;
+            }
+            if (this.extraCooldown > 0) {
+                return;
+            }
+            if (this.waterBucketSlot == null) {
+                this.waterBucketSlot = ItemUtil.findItemInRange(0, 9, Items.BUCKET);
+                if (this.waterBucketSlot == null) {
+                    return;
+                }
+            }
+            if (mc.player.getInventory().items.get(this.waterBucketSlot.intValue()).getItem() == Items.WATER_BUCKET) {
+                this.recoveryActive = false;
+                this.waterBucketSlot = null;
+                this.placedWaterPos = null;
+                this.postPlaceCooldown = Math.max(this.postPlaceCooldown, 1);
+                return;
+            }
+            if (this.placedWaterPos == null || !this.isWaterSource(this.placedWaterPos)) {
+                if (ItemUtil.findItemInRange(0, 9, Items.WATER_BUCKET) >= 0) {
+                    this.recoveryActive = false;
+                    this.waterBucketSlot = null;
+                    this.placedWaterPos = null;
+                    this.postPlaceCooldown = Math.max(this.postPlaceCooldown, 1);
+                    return;
+                }
+                BlockPos ownWater = this.findOwnWater();
+                if (ownWater == null) {
+                    return;
+                }
+                this.placedWaterPos = ownWater;
+            }
+            Rotation recoveryRotation = RotationUtil.rotationToBlock(this.placedWaterPos, 0.0f);
+            BlockHitResult recoveryHit = this.raycastFluid(recoveryRotation, 4.5);
+            if (recoveryHit.getType() == HitResult.Type.MISS || !recoveryHit.getBlockPos().equals(this.placedWaterPos)) {
+                return;
+            }
+            this.setTargetRotation(recoveryRotation);
+            this.selectSlot(this.waterBucketSlot);
+            this.useItem(recoveryRotation);
+            this.extraCooldown = 2;
             return;
         }
         if (!this.waterPlaced && !this.recoveryActive && this.placedWaterPos == null && this.postPlaceCooldown == 0 && this.postActionCooldown == 0 && this.accumulatedFall <= 0.5f && ItemUtil.findItemInRange(0, 9, Items.WATER_BUCKET) < 0 && (slot = ItemUtil.findItemInRange(0, 9, Items.BUCKET)) >= 0 && (bucketPos = this.findBucketPos()) != null && (hit = this.raycastFluid(rotation = RotationUtil.rotationToBlock(bucketPos, 0.0f), 4.5)).getType() != HitResult.Type.MISS && hit.getBlockPos().equals(bucketPos)) {
@@ -202,96 +251,27 @@ extends Module {
         }
     }
 
-    /**
-     * 收水：只收回本模块自己放下去的那一格水。
-     *
-     * <p>旧实现是一条 10 tick 的倒计时：{@code recoveryDelay} 等 2 tick、{@code recoveryCountdown}
-     * 每 tick 自减，到点无条件放弃。水还没变成源方块、射线被方块挡住、槽位被别的模块切走，
-     * 任意一种都会把这次回收耗掉 —— 这正是"有概率不收自己放的水"。
-     *
-     * <p>现在改成围绕一个明确目标的重试循环，收不到就一直收：
-     * <ul>
-     *   <li>目标只可能是 {@link #placedWaterPos} 及其六邻格（桶按在方块侧面时实际落点会偏一格），
-     *       别处的水一律不碰；</li>
-     *   <li>目标必须是<b>完整的一格水源</b>（见 {@link #isCompleteWater}），半格水/流动水/
-     *       waterlogged 方块收不了，直接不点；</li>
-     *   <li>目标不存在了（被方块顶掉、流干）= 没有可收的东西，正常结束；</li>
-     *   <li>空桶槽位每 tick 重新确认，被切走就重找；桶变回水桶 = 收成功；</li>
-     *   <li>只有射线一直被挡住才会走 {@link #RECOVERY_TIMEOUT} 的兜底。</li>
-     * </ul>
-     */
-    private void tickRecovery() {
-        if (mc.player == null || mc.level == null) {
-            this.stopRecovery();
-            return;
-        }
-        if (this.recoveryDelay > 0) {
-            --this.recoveryDelay;
-            return;
-        }
-        if (this.waterBucketSlot != null && this.slotItem(this.waterBucketSlot) == Items.WATER_BUCKET) {
-            this.stopRecovery();
-            return;
-        }
-        if (this.waterBucketSlot == null || this.slotItem(this.waterBucketSlot) != Items.BUCKET) {
-            this.waterBucketSlot = ItemUtil.findItemInRange(0, 9, Items.BUCKET);
-        }
-        if (this.waterBucketSlot == null) {
-            this.stopRecovery();
-            return;
-        }
-        BlockPos target = this.resolveRecoveryTarget();
-        if (target == null) {
-            this.stopRecovery();
-            return;
-        }
-        if (++this.recoveryTicks > RECOVERY_TIMEOUT) {
-            this.stopRecovery();
-            return;
-        }
-        Rotation rotation = RotationUtil.rotationToBlock(target, 0.0f);
-        BlockHitResult hit = this.raycastFluid(rotation, 4.5);
-        if (hit.getType() == HitResult.Type.MISS || !hit.getBlockPos().equals(target)) {
-            return;
-        }
-        this.setTargetRotation(rotation);
-        this.selectSlot(this.waterBucketSlot);
-        this.useItem(rotation);
-    }
-
-    /**
-     * 锁定这一桶水的实际位置：预测点优先，偏了就看它的六邻格。
-     *
-     * <p>{@link #getPlacementBlockPos} 是拿射线命中的面推出来的，桶按在方块侧面时预测点可能落在
-     * 方块本体上，实际水在相邻一格 —— 这是"偶尔不收自己放的水"的另一半原因。
-     */
-    private BlockPos resolveRecoveryTarget() {
-        if (this.placedWaterPos == null) {
-            return null;
-        }
-        if (this.isCompleteWater(this.placedWaterPos)) {
-            return this.placedWaterPos;
-        }
-        for (Direction direction : Direction.values()) {
-            BlockPos candidate = this.placedWaterPos.relative(direction);
-            if (this.isCompleteWater(candidate)) {
-                return candidate;
+    private BlockPos findOwnWater() {
+        BlockPos base = BlockPos.containing(mc.player.getX(), mc.player.getY(), mc.player.getZ());
+        BlockPos best = null;
+        double bestDistance = 9.0;
+        for (int dy = -2; dy <= 1; ++dy) {
+            for (int dx = -2; dx <= 2; ++dx) {
+                for (int dz = -2; dz <= 2; ++dz) {
+                    BlockPos pos = base.offset(dx, dy, dz);
+                    if (!this.isWaterSource(pos) || this.isNaturalWaterBody(pos)) {
+                        continue;
+                    }
+                    double distance = mc.player.position().distanceToSqr(
+                            (double) pos.getX() + 0.5, (double) pos.getY() + 0.5, (double) pos.getZ() + 0.5);
+                    if (distance < bestDistance) {
+                        bestDistance = distance;
+                        best = pos;
+                    }
+                }
             }
         }
-        return null;
-    }
-
-    private void stopRecovery() {
-        this.recoveryActive = false;
-        this.recoveryDelay = 0;
-        this.recoveryTicks = 0;
-        this.waterBucketSlot = null;
-        this.placedWaterPos = null;
-        this.postPlaceCooldown = Math.max(this.postPlaceCooldown, 1);
-    }
-
-    private Item slotItem(int slot) {
-        return mc.player.getInventory().items.get(slot).getItem();
+        return best;
     }
 
     private BlockPos findBucketPos() {
@@ -302,61 +282,17 @@ extends Module {
         for (int dy = -1; dy <= 1; ++dy) {
             for (int dx = -radius; dx <= radius; ++dx) {
                 for (int dz = -radius; dz <= radius; ++dz) {
+                    Rotation rotation;
+                    BlockHitResult hit;
+                    double distSq;
                     BlockPos candidatePos = playerPos.offset(dx, dy, dz);
-                    // Cheap rejections first: the distance test used to run after the fluid
-                    // classification, so all 243 candidates paid for a block-state lookup even
-                    // when a closer source had already been accepted.
-                    double distSq = mc.player.position().distanceToSqr(
-                            (double)candidatePos.getX() + 0.5, (double)candidatePos.getY() + 0.5, (double)candidatePos.getZ() + 0.5);
-                    if (distSq >= closestDistSq) continue;
-                    if (!this.isCollectableWater(candidatePos)) continue;
-                    Rotation rotation = RotationUtil.rotationToBlock(candidatePos, 0.0f);
-                    BlockHitResult hit = this.raycastFluid(rotation, 4.5);
-                    if (hit.getType() == HitResult.Type.MISS || !hit.getBlockPos().equals(candidatePos)) continue;
+                    if (!this.isWaterSource(candidatePos) || !this.isNaturalWaterBody(candidatePos) || (distSq = mc.player.position().distanceToSqr((double)candidatePos.getX() + 0.5, (double)candidatePos.getY() + 0.5, (double)candidatePos.getZ() + 0.5)) >= closestDistSq || (hit = this.raycastFluid(rotation = RotationUtil.rotationToBlock(candidatePos, 0.0f), 4.5)).getType() == HitResult.Type.MISS || !hit.getBlockPos().equals(candidatePos)) continue;
                     closestPos = candidatePos;
                     closestDistSq = distSq;
                 }
             }
         }
         return closestPos;
-    }
-
-    /**
-     * 装水（给空桶找水源）的目标筛选：完整的一格天然水源。
-     *
-     * <p>自己刚放下去的那一桶是孤立单格，{@link #isNaturalWaterBody} 数不出两个水源邻居，
-     * 所以不会被这里选走；waterlogged 方块里的半格水、流动水也过不了 {@link #isCompleteWater}。
-     */
-    private boolean isCollectableWater(BlockPos pos) {
-        return this.isCompleteWater(pos) && this.isNaturalWaterBody(pos);
-    }
-
-    /**
-     * 「完整方块的水」：整格水源。
-     *
-     * <p>三种不完整的情况全部排除：
-     * <ul>
-     *   <li>waterlogged 方块（台阶、楼梯、栅栏里的水）—— block 不是 {@code Blocks.WATER}；</li>
-     *   <li>流动水 —— {@code isSource()} 为假；</li>
-     *   <li>被方块占位/未流满的水 —— 碰撞形状非空，或水面高度不足一格。</li>
-     * </ul>
-     */
-    private boolean isCompleteWater(BlockPos pos) {
-        if (pos == null) {
-            return false;
-        }
-        BlockState state = mc.level.getBlockState(pos);
-        if (state.getBlock() != Blocks.WATER) {
-            return false;
-        }
-        FluidState fluidState = state.getFluidState();
-        if (fluidState.getType() != Fluids.WATER || !fluidState.isSource()) {
-            return false;
-        }
-        if (!state.getCollisionShape(mc.level, pos).isEmpty()) {
-            return false;
-        }
-        return fluidState.getOwnHeight() >= 0.99f;
     }
 
     private void setTargetRotation(Rotation rotation) {
@@ -376,11 +312,11 @@ extends Module {
         if (markPlaced) {
             this.waterPlaced = true;
         }
-        this.placedWaterPos = this.getPlacementBlockPos(rotation);
-        this.recoveryActive = (Boolean) this.recoverySetting.getValue();
+        this.recoveryActive = this.recoverySetting.getValue();
         this.recoveryDelay = 2;
-        this.recoveryTicks = 0;
+        this.recoveryCountdown = this.recoveryActive ? 30 : 0;
         this.waterBucketSlot = null;
+        this.placedWaterPos = this.getPlacementBlockPos(rotation);
     }
 
     private BlockPos getPlacementBlockPos(Rotation rotation) {
@@ -405,10 +341,15 @@ extends Module {
         return mc.level.clip(new ClipContext(eyePos, endPos, ClipContext.Block.OUTLINE, ClipContext.Fluid.SOURCE_ONLY, mc.player));
     }
 
+    private boolean isWaterSource(BlockPos blockPos) {
+        FluidState fluidState = mc.level.getFluidState(blockPos);
+        return fluidState.getType() == Fluids.WATER && fluidState.isSource();
+    }
+
     private boolean isNaturalWaterBody(BlockPos blockPos) {
         int waterNeighbours = 0;
         for (Direction direction : Direction.Plane.HORIZONTAL) {
-            if (this.isCompleteWater(blockPos.relative(direction))) {
+            if (mc.level.getFluidState(blockPos.relative(direction)).getType() == Fluids.WATER) {
                 waterNeighbours++;
             }
         }

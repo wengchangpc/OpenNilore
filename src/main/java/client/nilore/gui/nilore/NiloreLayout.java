@@ -2,14 +2,25 @@ package client.nilore.gui.nilore;
 
 /**
  * Geometry of the Nilore click GUI.
+ *
+ * <p>Row heights and type metrics are fixed; the three panes are re-flowed by {@link #resize} so a
+ * window can be dragged to a different size without touching the type scale.
  */
 public final class NiloreLayout {
-    public static final float WIDTH = 1360, HEIGHT = 860, RADIUS = 22;
-    public static final float SIDEBAR_W = 250, LIST_W = 750, DETAIL_W = 360;
-    public static final float LIST_X = SIDEBAR_W;
-    public static final float DETAIL_X = SIDEBAR_W + LIST_W;
+    public static final float NATURAL_W = 1360, NATURAL_H = 860;
+    public static final float MIN_W = 900, MIN_H = 560, MAX_W = 1920, MAX_H = 1080;
 
-    public static final Rect WINDOW = new Rect(0, 0, WIDTH, HEIGHT);
+    public static float WIDTH = NATURAL_W, HEIGHT = NATURAL_H;
+
+    public static final float SIDEBAR_W = 250;
+    public static float LIST_W = 750, DETAIL_W = 360;
+    public static float LIST_X = SIDEBAR_W, DETAIL_X = SIDEBAR_W + LIST_W;
+
+    public static Rect WINDOW = new Rect(0, 0, WIDTH, HEIGHT);
+
+    public static final float RADIUS = NiloreTheme.Radius.WINDOW;
+    public static final float TITLEBAR_H = NiloreTheme.Metrics.TITLEBAR_H;
+    public static final float CONTENT_TOP = TITLEBAR_H;
 
     /**
      * Window scale relative to the fitted size.
@@ -30,31 +41,16 @@ public final class NiloreLayout {
             LINE_DOC_SUB = 1.3f;
 
     /**
-     * Visual size multiplier on top of the reference's CSS font sizes.
-     *
-     * <p>Line heights are derived from the type sizes, so note rows, column rows and the doc head
-     * grow with the text and keep their breathing room. Only rows whose height is pinned by a
-     * control (the 53px switch row, the 52px select row) keep their height, so their padding gives
-     * up roughly 8-10% at 1.15 - still far from the cramped look the old 1.8x scale produced.
-     *
-     * <p>This scales type only; the panel footprint is unchanged. To zoom everything (type and
-     * panel together, breathing exactly preserved) change {@link #WINDOW_SCALE} instead.
-     */
-    private static final float TYPE_SCALE = 1.3f;
-
-    /**
      * Type sizes, held here rather than in the renderer because the row heights below are derived
-     * from them. Every size is the CSS font-size doubled - the {@code FontRenderer} size argument
-     * renders at about half its value - and rounded to a whole point, since AWT can only grid-fit a
-     * glyph at an integral size.
+     * from them. Sizes come from {@link NiloreTheme.Type}, where the CSS size is doubled (the
+     * {@code FontRenderer} size argument renders at about half its value) and rounded to a whole
+     * point, since AWT can only grid-fit a glyph at an integral size.
      */
-    public static final float SZ_SMALL = size(11), SZ_COUNT = size(12), SZ_GROUP = size(12), SZ_BODY = size(13),
-            SZ_LABEL = size(14), SZ_BRAND = size(17), SZ_NAV = size(14), SZ_TITLE = size(15),
-            SZ_DOC_TITLE = size(26);
-
-    private static float size(float css) {
-        return Math.round(2 * css * TYPE_SCALE);
-    }
+    public static final float SZ_SMALL = NiloreTheme.Type.CAPTION, SZ_COUNT = NiloreTheme.Type.SMALL,
+            SZ_GROUP = NiloreTheme.Type.SMALL, SZ_BODY = NiloreTheme.Type.BODY,
+            SZ_LABEL = NiloreTheme.Type.SMALL, SZ_BRAND = NiloreTheme.Type.TITLE,
+            SZ_NAV = NiloreTheme.Type.BODY, SZ_TITLE = NiloreTheme.Type.HEADLINE,
+            SZ_DOC_TITLE = NiloreTheme.Type.DOC_TITLE;
 
     /** Height one line of text occupies in CSS: line-height x font-size. */
     public static float lineBox(float sizeArgument, float lineHeight) {
@@ -63,31 +59,26 @@ public final class NiloreLayout {
 
     // sidebar
     public static final float SIDE_PAD_X = 10, SIDE_PAD_Y = 14, SIDE_GAP = 18;
-    public static final float BRAND_PAD_X = 8, BRAND_PAD_TOP = 6, BRAND_PAD_BOTTOM = 2;
-    public static final float BRAND_ROW = 34;
-    public static final float BRAND_H = BRAND_PAD_TOP + BRAND_ROW + BRAND_PAD_BOTTOM;
-    public static final float BRAND_TEXT_X = SIDE_PAD_X + BRAND_PAD_X;
-    public static final float BRAND_CENTER_Y = SIDE_PAD_Y + BRAND_PAD_TOP + BRAND_ROW / 2f;
-    public static final float NAV_TOP = SIDE_PAD_Y + BRAND_H + SIDE_GAP;
+    public static final float NAV_TOP = CONTENT_TOP + SIDE_PAD_Y;
     /** .side-label { padding: 0 10px 6px } */
     public static final float NAV_LABEL_LINE = lineBox(SZ_SMALL, LINE_DEFAULT),
             NAV_LABEL_H = NAV_LABEL_LINE + 6;
     public static final float NAV_LABEL_CENTER = NAV_TOP + NAV_LABEL_LINE / 2f - 2f;
     public static final float NAV_LABEL_PAD_X = 10;
     public static final float NAV_START = NAV_TOP + NAV_LABEL_H;
-    public static final float NAV_H = 38, NAV_GAP = 4, NAV_RADIUS = 10, NAV_PAD = 9, NAV_ICON = 22,
-            NAV_ICON_GAP = 9;
+    public static final float NAV_H = 38, NAV_GAP = 4, NAV_RADIUS = NiloreTheme.Radius.CONTROL, NAV_PAD = 9,
+            NAV_ICON = 22, NAV_ICON_GAP = 9;
+    public static final float FOOTER_GAP = 12;
+    public static final float FOOTER_H = (NAV_H + NAV_GAP) * 2 - NAV_GAP;
 
     // list pane
     public static final float SEARCH_PAD_TOP = 14, SEARCH_PAD_X = 20, SEARCH_PAD_BOTTOM = 10, SEARCH_H = 36;
-    public static final float SEARCH_X = LIST_X + SEARCH_PAD_X;
-    public static final float SEARCH_W = LIST_W - SEARCH_PAD_X * 2;
+    public static final float SEARCH_TOP = CONTENT_TOP + SEARCH_PAD_TOP;
     public static final float SEARCH_INNER_PAD = 12, SEARCH_ICON = 16, SEARCH_ICON_GAP = 7;
 
-    public static final float LIST_TOP = SEARCH_PAD_TOP + SEARCH_H + SEARCH_PAD_BOTTOM;
+    public static final float LIST_TOP = SEARCH_TOP + SEARCH_H + SEARCH_PAD_BOTTOM;
     public static final float LIST_PAD_X = 8, LIST_PAD_TOP = 4, LIST_PAD_BOTTOM = 18;
-    public static final float LIST_CONTENT_X = LIST_X + LIST_PAD_X;
-    public static final float LIST_CONTENT_W = LIST_W - LIST_PAD_X * 2;
+    public static float LIST_CONTENT_W = LIST_W - LIST_PAD_X * 2;
     /** .list-group-title { padding: 8px 12px 6px; font-size: 12px } */
     public static final float LIST_GROUP_PAD_TOP = 8, LIST_GROUP_PAD_BOTTOM = 6, GROUP_TITLE_PAD_X = 12;
     public static final float GROUP_TITLE_LINE = lineBox(SZ_GROUP, LINE_DEFAULT),
@@ -99,13 +90,13 @@ public final class NiloreLayout {
             NOTE_SUB_LINE = lineBox(SZ_BODY, LINE_NOTE);
     public static final float NOTE_TEXT_H = NOTE_TITLE_LINE + NOTE_SUB_GAP + NOTE_SUB_LINE;
     public static final float NOTE_H = Math.max(65, NOTE_PAD_Y * 2 + NOTE_TEXT_H);
-    public static final float NOTE_RADIUS = 10, NOTE_PAD_X = 12, NOTE_GAP = 12;
+    public static final float NOTE_RADIUS = NiloreTheme.Radius.ROW, NOTE_PAD_X = 12, NOTE_GAP = 12;
     public static final float SWITCH_W = 51, SWITCH_H = 31, SWITCH_KNOB = 27, SWITCH_PAD = 2;
 
-    public static final Rect LIST_VIEWPORT = new Rect(LIST_X, LIST_TOP, LIST_W, HEIGHT - LIST_TOP);
+    public static Rect LIST_VIEWPORT = new Rect(LIST_X, LIST_TOP, LIST_W, HEIGHT - LIST_TOP);
 
     // detail pane
-    public static final float DETAIL_PAD_TOP = 16;
+    public static final float DETAIL_PAD_TOP = CONTENT_TOP + 16;
     public static final float DOC_PAD_X = 14, DOC_PAD_TOP = 6, DOC_PAD_BOTTOM = 16;
     /** .doc-title { line-height: 1.15 }, .doc-sub { margin-top: 6px; line-height: 1.3 } */
     public static final float DOC_SUB_GAP = 6;
@@ -115,11 +106,11 @@ public final class NiloreLayout {
     public static final float DOC_H =
             Math.max(75, DOC_PAD_TOP + DOC_TEXT_H + DOC_PAD_BOTTOM);
     public static final float GROUP_MARGIN_X = 14, GROUP_MARGIN_BOTTOM = 20;
-    public static final float GROUP_X = DETAIL_X + GROUP_MARGIN_X;
-    public static final float GROUP_W = DETAIL_W - GROUP_MARGIN_X * 2;
+    public static float GROUP_X = DETAIL_X + GROUP_MARGIN_X;
+    public static float GROUP_W = DETAIL_W - GROUP_MARGIN_X * 2;
     /** .group-title { margin: 0 8px 8px } */
     public static final float GROUP_TITLE_GAP = 8;
-    public static final float GROUP_RADIUS = 14;
+    public static final float GROUP_RADIUS = NiloreTheme.Radius.PANEL;
 
     public static final float ROW_PAD_X = 14, ROW_PAD_Y = 11, ROW_MIN_H = 48;
     /** .setting-row.column { padding: 12px 14px 14px } - the control follows the label directly. */
@@ -129,8 +120,9 @@ public final class NiloreLayout {
     public static final float ROW_SWITCH_H =
             Math.max(ROW_PAD_Y * 2 + SWITCH_H, Math.max(ROW_MIN_H, ROW_LABEL_H + ROW_PAD_Y * 2));
     public static final float ROW_SELECT_H =
-            Math.max(ROW_PAD_Y * 2 + 30, Math.max(ROW_MIN_H, ROW_LABEL_H + ROW_PAD_Y * 2));
-    public static final float SELECT_H = 30, SELECT_RADIUS = 8, SELECT_MIN_W = 132, SELECT_MAX_W = 176;
+            Math.max(ROW_PAD_Y * 2 + NiloreTheme.Metrics.CONTROL_H, Math.max(ROW_MIN_H, ROW_LABEL_H + ROW_PAD_Y * 2));
+    public static final float SELECT_H = NiloreTheme.Metrics.CONTROL_H, SELECT_RADIUS = NiloreTheme.Radius.CONTROL,
+            SELECT_MIN_W = 132, SELECT_MAX_W = 176;
     public static final float SELECT_PAD_LEFT = 10, SELECT_PAD_RIGHT = 29, SELECT_CHEVRON = 12;
     public static final float SLIDER_H = 28, SLIDER_TRACK = 4, SLIDER_KNOB = 20;
     public static final float ROW_SLIDER_H =
@@ -138,20 +130,45 @@ public final class NiloreLayout {
     /** .segmented { height: 30px; padding: 2px; gap: 2px }, .seg-btn { height: 26px } */
     public static final float SEGMENT_PAD = 2, SEGMENT_GAP = 2;
     public static final float SEGMENTED_H = 30;
-    public static final float SEGMENT_RADIUS = 9, SEGMENT_BTN_RADIUS = 7;
+    public static final float SEGMENT_RADIUS = NiloreTheme.Radius.CONTROL,
+            SEGMENT_BTN_RADIUS = NiloreTheme.Radius.CONTROL;
     public static final float ROW_SEGMENTED_H =
             COL_PAD_TOP + ROW_LABEL_H + COL_BLOCK_GAP + SEGMENTED_H + COL_PAD_BOTTOM;
 
-    public static final Rect DETAIL_VIEWPORT = new Rect(DETAIL_X, DETAIL_PAD_TOP, DETAIL_W, HEIGHT - DETAIL_PAD_TOP);
+    public static Rect DETAIL_VIEWPORT = new Rect(DETAIL_X, DETAIL_PAD_TOP, DETAIL_W, HEIGHT - DETAIL_PAD_TOP);
 
     // dropdown
-    public static final float MENU_PAD = 4, MENU_RADIUS = 10, MENU_MIN_W = 150;
-    public static final float MENU_OPTION_H = 34, MENU_OPTION_RADIUS = 7, MENU_CHECK = 14;
+    public static final float MENU_PAD = 4, MENU_RADIUS = NiloreTheme.Radius.PANEL, MENU_MIN_W = 150;
+    public static final float MENU_OPTION_H = 34, MENU_OPTION_RADIUS = NiloreTheme.Radius.CONTROL, MENU_CHECK = 14;
+
+    // titlebar
+    public static final float TRAFFIC_X = NiloreTheme.Metrics.TRAFFIC_PAD,
+            TRAFFIC_Y = TITLEBAR_H / 2f;
+    public static final float TRAFFIC_DOT = NiloreTheme.Metrics.TRAFFIC_DOT,
+            TRAFFIC_GAP = NiloreTheme.Metrics.TRAFFIC_GAP;
+    public static final float TRAFFIC_HIT = 22;
 
     // scrollbars
     public static final float SCROLL_GUTTER = 12, SCROLL_KNOB = 4;
 
     private NiloreLayout() {
+    }
+
+    /** Re-flows the panes for a window of the given design size. */
+    public static void resize(float width, float height) {
+        WIDTH = width;
+        HEIGHT = height;
+        float body = width - SIDEBAR_W;
+        DETAIL_W = Math.max(300, body * .324f);
+        LIST_W = body - DETAIL_W;
+        LIST_X = SIDEBAR_W;
+        DETAIL_X = SIDEBAR_W + LIST_W;
+        LIST_CONTENT_W = LIST_W - LIST_PAD_X * 2;
+        GROUP_X = DETAIL_X + GROUP_MARGIN_X;
+        GROUP_W = DETAIL_W - GROUP_MARGIN_X * 2;
+        WINDOW = new Rect(0, 0, width, height);
+        LIST_VIEWPORT = new Rect(LIST_X, LIST_TOP, LIST_W, height - LIST_TOP);
+        DETAIL_VIEWPORT = new Rect(DETAIL_X, DETAIL_PAD_TOP, DETAIL_W, height - DETAIL_PAD_TOP);
     }
 
     public record Rect(float x, float y, float width, float height) {
@@ -171,6 +188,10 @@ public final class NiloreLayout {
             float left = Math.max(x, other.x), top = Math.max(y, other.y);
             return new Rect(left, top, Math.max(0, Math.min(right(), other.right()) - left),
                     Math.max(0, Math.min(bottom(), other.bottom()) - top));
+        }
+
+        public Rect offset(float dx, float dy) {
+            return new Rect(x + dx, y + dy, width, height);
         }
     }
 
@@ -196,27 +217,38 @@ public final class NiloreLayout {
     }
 
     public static Viewport viewport(int width, int height, float x, float y) {
-        float fit = Math.min(1, Math.min((width - 16f) / WIDTH, (height - 16f) / HEIGHT));
+        float fit = Math.min(1, Math.min((width - 16f) / NATURAL_W, (height - 16f) / NATURAL_H));
         float scale = Math.min(1f, fit * WINDOW_SCALE);
-        return new Viewport(clamp(x, 4, Math.max(4, width - WIDTH * scale - 4)),
-                clamp(y, 4, Math.max(4, height - HEIGHT * scale - 4)), scale);
+        return new Viewport(clamp(x, 4, Math.max(4, width - NATURAL_W * scale - 4)),
+                clamp(y, 4, Math.max(4, height - NATURAL_H * scale - 4)), scale);
     }
 
     public static Viewport centered(int width, int height) {
         Viewport size = viewport(width, height, 4, 4);
-        return viewport(width, height, (width - WIDTH * size.scale) / 2, (height - HEIGHT * size.scale) / 2);
+        return viewport(width, height, (width - NATURAL_W * size.scale) / 2, (height - NATURAL_H * size.scale) / 2);
+    }
+
+    /** Scale factor shared by every window, so panes never disagree about pixel density. */
+    public static float scale(int screenWidth, int screenHeight) {
+        float fit = Math.min(1, Math.min((screenWidth - 16f) / NATURAL_W, (screenHeight - 16f) / NATURAL_H));
+        return Math.max(.4f, Math.min(1f, fit * WINDOW_SCALE));
     }
 
     public static Rect navItem(int index) {
         return new Rect(SIDE_PAD_X, NAV_START + index * (NAV_H + NAV_GAP), SIDEBAR_W - SIDE_PAD_X * 2, NAV_H);
     }
 
+    public static Rect footerItem(int index) {
+        return new Rect(SIDE_PAD_X, HEIGHT - SIDE_PAD_Y - FOOTER_H + index * (NAV_H + NAV_GAP),
+                SIDEBAR_W - SIDE_PAD_X * 2, NAV_H);
+    }
+
     public static Rect searchBox() {
-        return new Rect(SEARCH_X, SEARCH_PAD_TOP, SEARCH_W, SEARCH_H);
+        return new Rect(LIST_X + SEARCH_PAD_X, SEARCH_TOP, LIST_W - SEARCH_PAD_X * 2, SEARCH_H);
     }
 
     public static Rect noteRow(int index, float scroll) {
-        return new Rect(LIST_CONTENT_X, LIST_TOP + LIST_PAD_TOP + GROUP_TITLE_H + index * NOTE_H - scroll,
+        return new Rect(LIST_X + LIST_PAD_X, LIST_TOP + LIST_PAD_TOP + GROUP_TITLE_H + index * NOTE_H - scroll,
                 LIST_CONTENT_W, NOTE_H);
     }
 
@@ -262,6 +294,11 @@ public final class NiloreLayout {
 
     public static float rowContentW() {
         return GROUP_W - ROW_PAD_X * 2;
+    }
+
+    public static Rect trafficLight(int index) {
+        float x = TRAFFIC_X + index * (TRAFFIC_DOT + TRAFFIC_GAP);
+        return new Rect(x, TRAFFIC_Y - TRAFFIC_DOT / 2f, TRAFFIC_DOT, TRAFFIC_DOT);
     }
 
     public static Rect thumb(float scroll, float maximum, Rect viewport) {

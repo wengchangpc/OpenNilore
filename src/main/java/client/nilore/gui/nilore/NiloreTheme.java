@@ -1,80 +1,171 @@
 package client.nilore.gui.nilore;
 
 /**
- * Colour tokens of the Nilore click GUI.
+ * Design tokens of the Nilore click GUI: colour, radius, spacing, type, motion and effects.
+ *
+ * <p>Every value the painter uses is resolved here; drawing code references tokens only. Light and
+ * dark palettes follow the macOS surface hierarchy, and the window chrome and traffic lights share
+ * the same two palettes so a live theme switch needs no rebuild.
  */
 public final class NiloreTheme {
-    public static final class Palette {
-        public final int window;
-        public final int sidebar;
-        public final int list;
-        public final int detail;
-        public final int card;
-        public final int popover;
-        public final int segmentActive;
-        public final int field;
-        public final int rowHover;
-        public final int rowSelected;
-        public final int navHover;
-        public final int switchOff;
-        public final int separator;
-        public final int text;
-        public final int secondary;
-        public final int tertiary;
-        public final int accent;
-        public final int accentSoft;
-        public final int blue;
-        public final int green;
-        public final int red;
-        public final int shadow;
-        public final int hairline;
+    /** CSS font sizes, mapped to the size argument the rasteriser expects (about half a point). */
+    public static final class Type {
+        public static final float SCALE = 1.3f;
+        public static final float CAPTION = size(11), SMALL = size(12), BODY = size(13), HEADLINE = size(15),
+                TITLE = size(17), DOC_TITLE = size(22);
 
-        private Palette(int window, int sidebar, int list, int detail, int card, int popover, int segmentActive,
-                        int field, int rowHover, int rowSelected, int navHover, int switchOff, int separator,
-                        int text, int secondary, int tertiary, int accent, int accentSoft, int blue, int green,
-                        int red, int shadow, int hairline) {
-            this.window = window;
-            this.sidebar = sidebar;
-            this.list = list;
-            this.detail = detail;
-            this.card = card;
-            this.popover = popover;
-            this.segmentActive = segmentActive;
-            this.field = field;
-            this.rowHover = rowHover;
-            this.rowSelected = rowSelected;
-            this.navHover = navHover;
-            this.switchOff = switchOff;
-            this.separator = separator;
-            this.text = text;
-            this.secondary = secondary;
-            this.tertiary = tertiary;
-            this.accent = accent;
-            this.accentSoft = accentSoft;
-            this.blue = blue;
-            this.green = green;
-            this.red = red;
-            this.shadow = shadow;
-            this.hairline = hairline;
+        private Type() {
+        }
+
+        private static float size(float css) {
+            return Math.round(2 * css * SCALE);
         }
     }
 
-    public static final Palette LIGHT = new Palette(
-            0xB8FFFFFF, 0x9EE8E8ED, 0x57FFFFFF, 0xBDF9F9FB, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
-            0x1F767680, 0x12787880, 0x33FFD60A, 0x1A787880, 0x52787880, 0x213C3C43,
-            0xFF111114, 0xFF6E6E73, 0xFFAEAEB2, 0xFFFFD60A, 0x38FFD60A, 0xFF0A84FF, 0xFF34C759, 0xFFFF3B30,
-            0x380F172A, 0x59FFFFFF);
+    public static final class Radius {
+        public static final float CONTROL = 6, ROW = 6, PANEL = 10, WINDOW = 12;
 
-    public static final Palette DARK = new Palette(
-            0xB81E1E22, 0xC718181A, 0x731E1E22, 0xC71C1C1E, 0xFF1C1C1E, 0xFF2C2C2E, 0xFF636366,
-            0x3D767680, 0x0BFFFFFF, 0x1AFFFFFF, 0x1A787880, 0x52787880, 0x8F545458,
-            0xFFF2F2F7, 0xFF98989F, 0xFF636366, 0xFFFFD60A, 0x2EFFD60A, 0xFF0A84FF, 0xFF30D158, 0xFFFF453A,
-            0x94000000, 0x59FFFFFF);
+        private Radius() {
+        }
+    }
+
+    public static final class Metrics {
+        public static final float GRID = 8, CONTROL_H = 28, BUTTON_H = 32;
+        public static final float TITLEBAR_H = 36;
+        public static final float TRAFFIC_DOT = 13, TRAFFIC_GAP = 8, TRAFFIC_PAD = 14;
+
+        private Metrics() {
+        }
+    }
+
+    /**
+     * Motion tokens. Durations follow the 150-250ms range; the springs are critically damped, so a
+     * duration maps to a rate through the 5-tau settling constant. Any value in between stays a
+     * pure exponential decay, which reads the same as cubic-bezier(0.4, 0, 0.2, 1) at these
+     * durations.
+     */
+    public static final class Motion {
+        public static final float FAST = .15f, NORMAL = .2f, SLOW = .25f;
+        public static final double FAST_RATE = rate(FAST), NORMAL_RATE = rate(NORMAL), SLOW_RATE = rate(SLOW);
+
+        private Motion() {
+        }
+
+        private static double rate(float seconds) {
+            return 5.0 / seconds;
+        }
+    }
+
+    public static final class Effects {
+        public static final float BLUR = 20, SATURATE = 1.8f;
+        public static final float SHADOW_BLUR = 30, SHADOW_OFFSET = 10;
+        public static final int KNOB_SHADOW = 0x1F000000;
+
+        private Effects() {
+        }
+    }
+
+    public static final class Palette {
+        public int window, chrome, sidebar, list, detail, card, popover, field;
+        public int text, secondary, tertiary, titleFocused, titleIdle;
+        public int accent, accentSoft, blue, green, red, orange;
+        public int separator, hairline;
+        public int rowHover, rowSelected, navHover, segmentActive, switchOff, switchOn, switchKnob, selectEditing;
+        public int close, minimize, maximize, controlIdle, controlGlyph;
+        public int shadow;
+
+        private Palette() {
+        }
+    }
+
+    public static final Palette LIGHT = light();
+    public static final Palette DARK = dark();
 
     private NiloreTheme() {
     }
 
     public static Palette of(boolean dark) {
         return dark ? DARK : LIGHT;
+    }
+
+    private static Palette light() {
+        Palette p = new Palette();
+        p.window = 0xEDFFFFFF;
+        p.chrome = 0x08FFFFFF;
+        p.sidebar = 0x8CE8E8ED;
+        p.list = 0x47FFFFFF;
+        p.detail = 0xE3F5F5F7;
+        p.card = 0xFFFFFFFF;
+        p.popover = 0xFFFFFFFF;
+        p.field = 0x14767680;
+        p.text = 0xFF1D1D1F;
+        p.secondary = 0xFF6E6E73;
+        p.tertiary = 0xFFAEAEB2;
+        p.titleFocused = 0xFF1D1D1F;
+        p.titleIdle = 0xFF8E8E93;
+        p.accent = 0xFF007AFF;
+        p.accentSoft = 0x1F007AFF;
+        p.blue = 0xFF007AFF;
+        p.green = 0xFF34C759;
+        p.red = 0xFFFF3B30;
+        p.orange = 0xFFFF9F0A;
+        p.separator = 0x1A000000;
+        p.hairline = 0x33000000;
+        p.rowHover = 0x0F787880;
+        p.rowSelected = 0x1F007AFF;
+        p.navHover = 0x1A787880;
+        p.segmentActive = 0xFFFFFFFF;
+        p.switchOff = 0x22787880;
+        // 开关的开启色：深色配色里的那把绿，亮色下沿用同一个值，两种主题的布尔按钮看起来一致。
+        p.switchOn = 0xFF30D158;
+        p.switchKnob = 0xFFFFFFFF;
+        p.selectEditing = 0x2E767680;
+        p.close = 0xFFFF5F57;
+        p.minimize = 0xFFFEBC2E;
+        p.maximize = 0xFF28C840;
+        p.controlIdle = 0xFFD6D6D8;
+        p.controlGlyph = 0x73000000;
+        p.shadow = 0x26000000;
+        return p;
+    }
+
+    private static Palette dark() {
+        Palette p = new Palette();
+        p.window = 0xF01E1E1E;
+        p.chrome = 0x0FFFFFFF;
+        p.sidebar = 0x8C1A1A1C;
+        p.list = 0x2EFFFFFF;
+        p.detail = 0xE8252527;
+        p.card = 0xFF2C2C2E;
+        p.popover = 0xFF2C2C2E;
+        p.field = 0x3D767680;
+        p.text = 0xFFF5F5F7;
+        p.secondary = 0xFF98989D;
+        p.tertiary = 0xFF636366;
+        p.titleFocused = 0xFFF5F5F7;
+        p.titleIdle = 0xFF6E6E73;
+        p.accent = 0xFF0A84FF;
+        p.accentSoft = 0x1F0A84FF;
+        p.blue = 0xFF0A84FF;
+        p.green = 0xFF30D158;
+        p.red = 0xFFFF453A;
+        p.orange = 0xFFFF9F0A;
+        p.separator = 0x1FFFFFFF;
+        p.hairline = 0x33FFFFFF;
+        p.rowHover = 0x14FFFFFF;
+        p.rowSelected = 0x1F0A84FF;
+        p.navHover = 0x1AFFFFFF;
+        p.segmentActive = 0xFF636366;
+        p.switchOff = 0x28FFFFFF;
+        p.switchOn = 0xFF30D158;
+        p.switchKnob = 0xFFFFFFFF;
+        p.selectEditing = 0x3DFFFFFF;
+        p.close = 0xFFFF5F57;
+        p.minimize = 0xFFFEBC2E;
+        p.maximize = 0xFF28C840;
+        p.controlIdle = 0xFF4A4A4C;
+        p.controlGlyph = 0x99000000;
+        p.shadow = 0x66000000;
+        return p;
     }
 }

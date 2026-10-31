@@ -12,9 +12,11 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import client.nilore.NiloreClient;
+import client.nilore.config.SavedConfigs;
 import client.nilore.gui.nilore.NiloreLayout.Motion;
 import client.nilore.gui.nilore.NiloreLayout.Rect;
 import client.nilore.gui.nilore.NiloreLayout.Viewport;
+import client.nilore.gui.nilore.NiloreRenderer.Chrome;
 import client.nilore.gui.nilore.NiloreRenderer.Detail;
 import client.nilore.gui.nilore.NiloreRenderer.Editor;
 import client.nilore.gui.nilore.NiloreRenderer.Group;
@@ -22,8 +24,11 @@ import client.nilore.gui.nilore.NiloreRenderer.Kind;
 import client.nilore.gui.nilore.NiloreRenderer.MenuOption;
 import client.nilore.gui.nilore.NiloreRenderer.Nav;
 import client.nilore.gui.nilore.NiloreRenderer.Note;
+import client.nilore.gui.nilore.NiloreRenderer.PaneRow;
 import client.nilore.gui.nilore.NiloreRenderer.Pill;
 import client.nilore.gui.nilore.NiloreRenderer.Row;
+import client.nilore.gui.nilore.NiloreTheme;
+import client.nilore.gui.nilore.NiloreTheme.Palette;
 import client.nilore.modules.Category;
 import client.nilore.modules.Module;
 import client.nilore.modules.impl.render.ClickGuiModule;
@@ -49,32 +54,49 @@ public final class NiloreClickGui extends Screen {
     private static final String NAV_LABEL = "Categories";
     private static final Rect EMPTY = new Rect(0, 0, 0, 0);
     private static final float VALUE_BOX_W = 80;
+    private static final float RESIZE_EDGE = 6, RESIZE_CORNER = 14;
+    private static final float PANE_SETTINGS_W = 520, PANE_SETTINGS_H = 320;
+    private static final float PANE_CONFIGS_W = 560, PANE_CONFIGS_H = 460;
+    private static final String TEXT_SETTINGS = "Settings", TEXT_CONFIGS = "Configs", TEXT_MODULES = "Modules";
 
+    private enum Id { MODULES, SETTINGS, CONFIGS }
+
+    private final List<Win> order = new ArrayList<>();
     private final Map<Object, Motion> toggles = new HashMap<>();
     private final Map<Object, Motion> controls = new HashMap<>();
-    private final Motion windowMotion = new Motion(0, 22);
     private final Motion listMotion = new Motion(0, 28);
     private final Motion detailMotion = new Motion(0, 28);
     private final Motion selectionMotion = new Motion(navItem(0).y(), 30);
+    private final Motion windowMotion = new Motion(0, 22);
 
     private Field search;
+    private final Field configName = new Field(32);
     private Viewport viewport;
+    private float scale = 1;
+    private float openingScale = 1;
     private List<Module> visible = List.of();
     private List<Note> notes = List.of();
     private Detail detail;
     private final List<RowRef> rowRefs = new ArrayList<>();
     private final List<Rect> navRects = new ArrayList<>();
+    private final List<Rect> footerRects = new ArrayList<>();
+    private final List<PaneRow> paneRows = new ArrayList<>();
+    private final List<String> configNames = new ArrayList<>();
     private Rect docToggle = EMPTY;
     private MenuState menu;
     private Module selected, binding;
     private NumberSetting editing;
     private RowRef draggingSlider;
+    private Win dragging, resizing;
+    private int resizeMode;
+    private float dragGrabX, dragGrabY, resizeBaseW, resizeBaseH;
     private int navigation;
-    private float mouseX, mouseY, opacity, openingScale = 1;
+    private float mouseX, mouseY, opacity, screenX, screenY;
     private float listScroll, listScrollTarget, listMax, detailScroll, detailScrollTarget, detailMax;
     private float windowGrabX, windowGrabY, scrollGrab;
-    private int draggingScroll;
-    private boolean draggingWindow, closing, detached = true;
+    private int draggingScroll, hoverDot = -1, lastClickWin = -1;
+    private double lastClickTime, lastClickY;
+    private boolean closing, detached = true, configsLoaded;
     private String editText = "";
     private boolean editReplace = true;
 
@@ -87,7 +109,7 @@ public final class NiloreClickGui extends Screen {
     }
 
     private float rasterScale() {
-        return Fonts.deviceScale(viewport == null ? 1f : viewport.scale());
+        return Fonts.deviceScale(scale);
     }
 
     @Override
@@ -95,8 +117,16 @@ public final class NiloreClickGui extends Screen {
         if (search == null) {
             search = new Field(48);
         }
-        Viewport center = centered(width, height);
-        viewport = viewport(width, height, center.x(), center.y());
+        scale = NiloreLayout.scale(width, height);
+        if (order.isEmpty()) {
+            Win main = new Win(Id.MODULES, TEXT_MODULES, 3, NATURAL_W, NATURAL_H);
+            main.x = (width - main.w * scale) / 2f;
+            main.y = Math.max(2, (height - main.h * scale) / 2f);
+            main.open.snap(1, now());
+            order.add(main);
+        }
+        clampWindows();
+        useLayout(focusedOrMain());
         if (detached) {
             double time = now();
             windowMotion.snap(0, time);
@@ -109,6 +139,157 @@ public final class NiloreClickGui extends Screen {
             search.setFocused(false);
         }
         refresh(now());
+    }
+
+    // -- windows ------------------------------------------------------------------
+
+    private final class Win {
+        final Id id;
+        final String title;
+        final int icon;
+        final Motion open = new Motion(0, NiloreTheme.Motion.NORMAL_RATE);
+        float x, y, w, h;
+        float restoreX, restoreY, restoreW, restoreH;
+        boolean maximized;
+
+        Win(Id id, String title, int icon, float w, float h) {
+            this.id = id;
+            this.title = title;
+            this.icon = icon;
+            this.w = w;
+            this.h = h;
+        }
+
+        Rect screen() {
+            return new Rect(x, y, w * scale, h * scale);
+        }
+    }
+
+    private Win modules() {
+        for (Win win : order) {
+            if (win.id == Id.MODULES) {
+                return win;
+            }
+        }
+        return null;
+    }
+
+    private Win focused() {
+        return order.isEmpty() ? null : order.get(order.size() - 1);
+    }
+
+    private Win focusedOrMain() {
+        Win win = focused();
+        return win == null ? modules() : win;
+    }
+
+    private Win find(Id id) {
+        for (Win win : order) {
+            if (win.id == id) {
+                return win;
+            }
+        }
+        return null;
+    }
+
+    private void useLayout(Win win) {
+        if (win == null) {
+            return;
+        }
+        NiloreLayout.resize(win.w, win.h);
+        viewport = new Viewport(win.x, win.y, scale);
+    }
+
+    private void focus(Win win) {
+        if (win == null) {
+            return;
+        }
+        order.remove(win);
+        order.add(win);
+        win.open.to(1, now());
+    }
+
+    private Win openWindow(Id id) {
+        Win win = find(id);
+        if (win != null) {
+            focus(win);
+            return win;
+        }
+        boolean settings = id == Id.SETTINGS;
+        win = new Win(id, settings ? TEXT_SETTINGS : TEXT_CONFIGS, settings ? 5 : 7,
+                settings ? PANE_SETTINGS_W : PANE_CONFIGS_W, settings ? PANE_SETTINGS_H : PANE_CONFIGS_H);
+        Win last = focusedOrMain();
+        win.x = last == null ? 40 : last.x + 28;
+        win.y = last == null ? 40 : last.y + 28;
+        win.open.snap(0, now());
+        order.add(win);
+        clampWindows();
+        win.open.to(1, now());
+        if (id == Id.CONFIGS) {
+            configsLoaded = false;
+        }
+        refresh(now());
+        return win;
+    }
+
+    private void closeWindow(Win win) {
+        if (win == null) {
+            return;
+        }
+        if (win.id == Id.MODULES) {
+            onClose();
+            return;
+        }
+        order.remove(win);
+        if (win.id == Id.CONFIGS) {
+            configName.setFocused(false);
+        }
+    }
+
+    private void clampWindows() {
+        for (Win win : order) {
+            float sw = win.w * scale, sh = win.h * scale;
+            if (win.x + sw > width - 2) {
+                win.x = Math.max(2, width - sw - 2);
+            }
+            if (win.y + sh > height - 2) {
+                win.y = Math.max(2, height - sh - 2);
+            }
+            win.x = Math.max(2, win.x);
+            win.y = Math.max(2, win.y);
+        }
+    }
+
+    private Win windowAt(double x, double y) {
+        for (int i = order.size() - 1; i >= 0; i--) {
+            Win win = order.get(i);
+            Rect bounds = win.screen();
+            if (x >= bounds.x() && x < bounds.right() && y >= bounds.y() && y < bounds.bottom()) {
+                return win;
+            }
+        }
+        return null;
+    }
+
+    private Rect chromeRect(Win win) {
+        return new Rect(win.x, win.y, win.w * scale, TITLEBAR_H * scale);
+    }
+
+    private int resizeHandle(Win win, double x, double y) {
+        Rect bounds = win.screen();
+        boolean nearRight = x >= bounds.right() - RESIZE_EDGE && x < bounds.right() + 2;
+        boolean nearBottom = y >= bounds.bottom() - RESIZE_EDGE && y < bounds.bottom() + 2;
+        if (x >= bounds.right() - RESIZE_CORNER && x < bounds.right() + 2 && y >= bounds.bottom() - RESIZE_CORNER
+                && y < bounds.bottom() + 2) {
+            return 3;
+        }
+        if (nearRight && y > bounds.y() && y < bounds.bottom()) {
+            return 1;
+        }
+        if (nearBottom && x > bounds.x() && x < bounds.right()) {
+            return 2;
+        }
+        return 0;
     }
 
     // -- data ---------------------------------------------------------------------
@@ -206,6 +387,10 @@ public final class NiloreClickGui extends Screen {
     // -- layout -------------------------------------------------------------------
 
     private void refresh(double time) {
+        Win main = modules();
+        if (main != null) {
+            useLayout(main);
+        }
         List<Module> modules = visibleModules();
         if (selected == null || !modules.contains(selected)) {
             selected = modules.isEmpty() ? null : modules.get(0);
@@ -220,7 +405,7 @@ public final class NiloreClickGui extends Screen {
             Rect bounds = noteRow(i, listScroll);
             rows.add(new Note(bounds, module.getName(), subtitle(module), module.isEnabled(), module == selected,
                     bounds.intersect(LIST_VIEWPORT).contains(mouseX, mouseY),
-                    toggleMotion(module, module.isEnabled() ? 1 : 0, 45, time)));
+                    toggleMotion(module, module.isEnabled() ? 1 : 0, time)));
         }
         notes = List.copyOf(rows);
         listMax = Math.max(0, LIST_PAD_TOP + GROUP_TITLE_H + modules.size() * NOTE_H + LIST_PAD_BOTTOM
@@ -235,6 +420,10 @@ public final class NiloreClickGui extends Screen {
         for (int i = 0; i < NAV_CATEGORIES.length; i++) {
             navRects.add(navItem(i));
         }
+        footerRects.clear();
+        footerRects.add(footerItem(0));
+        footerRects.add(footerItem(1));
+
         rowRefs.clear();
         docToggle = EMPTY;
         detail = selected == null ? null : buildDetail(selected, time);
@@ -278,7 +467,7 @@ public final class NiloreClickGui extends Screen {
                 Rect control = new Rect(contentRight - SWITCH_W, y + (ROW_SWITCH_H - SWITCH_H) / 2f, SWITCH_W,
                         SWITCH_H);
                 rows.add(new Row(Kind.SWITCH, bounds, control, EMPTY, setting.getName(), "", toggleMotion(setting,
-                        value.getValue() ? 1 : 0, 45, time), hovered, false, List.of()));
+                        value.getValue() ? 1 : 0, time), hovered, false, List.of()));
                 rowRefs.add(new RowRef(bounds, control, EMPTY, Kind.SWITCH, module, setting, List.of()));
                 y += ROW_SWITCH_H;
             } else if (setting instanceof NumberSetting value) {
@@ -320,7 +509,7 @@ public final class NiloreClickGui extends Screen {
         Rect group = new Rect(GROUP_X, y - body, GROUP_W, body);
         detailMax = Math.max(0, DOC_H + body + GROUP_MARGIN_BOTTOM - (HEIGHT - DETAIL_PAD_TOP));
         return new Detail(head, docToggle, module.getName(), subtitle(module),
-                toggleMotion(module, module.isEnabled() ? 1 : 0, 45, time),
+                toggleMotion(module, module.isEnabled() ? 1 : 0, time),
                 List.of(new Group(group, "", List.copyOf(rows))));
     }
 
@@ -339,13 +528,15 @@ public final class NiloreClickGui extends Screen {
         return List.copyOf(pills);
     }
 
-    private float toggleMotion(Object key, float target, double rate, double time) {
-        return clamp(toggles.computeIfAbsent(key, ignored -> new Motion(target, rate)).to(target, time), 0, 1);
+    private float toggleMotion(Object key, float target, double time) {
+        return clamp(toggles.computeIfAbsent(key, ignored -> new Motion(target, NiloreTheme.Motion.NORMAL_RATE))
+                .to(target, time), 0, 1);
     }
 
     private float progressOf(NumberSetting setting, double time) {
         float fraction = fractionOf(setting);
-        return clamp(controls.computeIfAbsent(setting, ignored -> new Motion(fraction, 22)).to(fraction, time), 0, 1);
+        return clamp(controls.computeIfAbsent(setting, ignored -> new Motion(fraction, NiloreTheme.Motion.SLOW_RATE))
+                .to(fraction, time), 0, 1);
     }
 
     private static float fractionOf(NumberSetting setting) {
@@ -356,37 +547,160 @@ public final class NiloreClickGui extends Screen {
         return clamp((float) ((setting.getValue().doubleValue() - min) / (max - min)), 0, 1);
     }
 
+    // -- panes --------------------------------------------------------------------
+
+    private void buildPane(Win win) {
+        paneRows.clear();
+        if (win == null || win.id == Id.MODULES) {
+            return;
+        }
+        Viewport pane = new Viewport(win.x, win.y, scale);
+        float mx = pane.localX(screenX, openingScale);
+        float my = pane.localY(screenY, openingScale);
+        if (win.id == Id.SETTINGS) {
+            buildSettingsPane(mx, my);
+        } else {
+            buildConfigsPane(mx, my);
+        }
+    }
+
+    private void buildSettingsPane(float mx, float my) {
+        ClickGuiModule module = NiloreClient.getInstance().getModuleManager().getModule(ClickGuiModule.class);
+        if (module == null) {
+            return;
+        }
+        float x = 16, width = WIDTH - 32;
+        float y = CONTENT_TOP + 18;
+        List<Setting<?>> settings = new ArrayList<>();
+        settings.add(module.styleSetting);
+        settings.add(module.niloreTheme);
+        for (Setting<?> setting : settings) {
+            if (!(setting instanceof ModeSetting value)) {
+                continue;
+            }
+            Rect bounds = new Rect(x, y, width, ROW_SEGMENTED_H);
+            Rect control = new Rect(x, y + COL_PAD_TOP + ROW_LABEL_H, width, SEGMENTED_H);
+            List<Pill> pills = modePills(value, control);
+            paneRows.add(new PaneRow(Kind.SEGMENTED, bounds, control, setting.getName(), value.getValue(), 0,
+                    false, false, false, pills));
+            y += ROW_SEGMENTED_H + 4;
+        }
+    }
+
+    private List<Pill> modePills(ModeSetting setting, Rect control) {
+        String[] modes = setting.getModes();
+        float width = (control.width() - SEGMENT_PAD * 2 - SEGMENT_GAP * (modes.length - 1)) / modes.length;
+        List<Pill> pills = new ArrayList<>(modes.length);
+        for (int i = 0; i < modes.length; i++) {
+            Rect bounds = new Rect(control.x() + SEGMENT_PAD + i * (width + SEGMENT_GAP), control.y() + SEGMENT_PAD,
+                    width, SEGMENTED_H - SEGMENT_PAD * 2);
+            pills.add(new Pill(bounds, modes[i], modes[i].equals(setting.getValue())));
+        }
+        return List.copyOf(pills);
+    }
+
+    private void buildConfigsPane(float mx, float my) {
+        float x = 16, width = WIDTH - 32;
+        float y = CONTENT_TOP + 18;
+        Rect input = new Rect(x, y, width - 96, 34);
+        paneRows.add(new PaneRow(Kind.INPUT, input, input, "Config name", configName.getValue(), 0,
+                input.contains(mx, my), false, configName.focused, List.of()));
+        Rect save = new Rect(x + width - 86, y, 86, 34);
+        paneRows.add(new PaneRow(Kind.BUTTON, save, save, "Save", "", 0, save.contains(mx, my), false,
+                false, List.of()));
+        y += 34 + 18;
+        if (!configsLoaded) {
+            configNames.clear();
+            configNames.addAll(SavedConfigs.list());
+            configsLoaded = true;
+        }
+        for (String name : configNames) {
+            Rect row = new Rect(x, y, width, 40);
+            paneRows.add(new PaneRow(Kind.LIST, row, row, name, "Load", 0, row.contains(mx, my), false,
+                    false, List.of()));
+            y += 40;
+        }
+        if (configNames.isEmpty()) {
+            Rect row = new Rect(x, y, width, 40);
+            paneRows.add(new PaneRow(Kind.LIST, row, row, "No saved configs", "", 0, false, false, false, List.of()));
+        }
+    }
+
     // -- render -------------------------------------------------------------------
 
     @Override
     public void render(GuiGraphics gg, int mx, int my, float partialTick) {
-        if (viewport == null) {
-            return;
-        }
         double time = now();
+        scale = NiloreLayout.scale(width, height);
         opacity = clamp(windowMotion.to(closing ? 0 : 1, time), 0, 1);
         openingScale = .975f + opacity * .025f;
-        setMouse(mx, my);
+        screenX = mx;
+        screenY = my;
         if (closing && opacity < .01f) {
             minecraft.setScreen(null);
             return;
         }
+        Win top = focused();
+        useLayout(modules());
+        setMouse(mx, my);
         listScroll = listMotion.to(listScrollTarget, time);
         detailScroll = detailMotion.to(detailScrollTarget, time);
         refresh(time);
-
-        List<Nav> nav = new ArrayList<>(NAV_CATEGORIES.length);
-        for (int i = 0; i < NAV_CATEGORIES.length; i++) {
-            Category category = NAV_CATEGORIES[i];
-            nav.add(new Nav(category.displayName, categoryCount(category), NAV_ICONS[i], i == navigation,
-                    navRects.get(i).contains(mouseX, mouseY)));
-        }
+        hoverDot = trafficHover(time);
         boolean dark = dark();
-        NiloreRenderer.Frame frame = new NiloreRenderer.Frame(viewport, opacity, openingScale,
-                selectionMotion.to(navItem(navigation).y(), time),
-                NiloreTheme.of(dark), dark, NAV_LABEL, nav, new Editor(search.value, search.focused), listTitle(),
-                notes, listScroll, listMax, detail, detailScroll, detailMax, menuFrame(time), mouseX, mouseY);
-        Renderer.renderConsumer(dc -> NiloreRenderer.paint(dc, gg, frame));
+        Palette palette = NiloreTheme.of(dark);
+
+        Renderer.renderConsumer(dc -> {
+            for (Win win : order) {
+                useLayout(win);
+                float reveal = win.open.to(1, time);
+                float windowScale = .96f + .04f * reveal;
+                Viewport pane = new Viewport(win.x, win.y, scale);
+                boolean isTop = win == top;
+                Chrome chrome = new Chrome(win.title, isTop, win.maximized, isTop ? hoverDot : -1);
+                if (win.id == Id.MODULES) {
+                    List<Nav> nav = new ArrayList<>(NAV_CATEGORIES.length);
+                    for (int i = 0; i < NAV_CATEGORIES.length; i++) {
+                        Category category = NAV_CATEGORIES[i];
+                        nav.add(new Nav(category.displayName, categoryCount(category), NAV_ICONS[i], i == navigation,
+                                navRects.get(i).contains(mouseX, mouseY)));
+                    }
+                    List<Nav> footer = List.of(
+                            new Nav(TEXT_SETTINGS, -1, 5, false, footerRects.get(0).contains(mouseX, mouseY)),
+                            new Nav(TEXT_CONFIGS, -1, 7, false, footerRects.get(1).contains(mouseX, mouseY)));
+                    NiloreRenderer.Frame frame = new NiloreRenderer.Frame(pane, opacity * reveal, windowScale, chrome,
+                            selectionMotion.to(navItem(navigation).y(), time), palette, dark, NAV_LABEL, nav, footer,
+                            new Editor(search.value, search.focused), listTitle(), notes, listScroll, listMax, detail,
+                            detailScroll, detailMax, menuFrame(time), mouseX, mouseY);
+                    NiloreRenderer.paintModules(dc, gg, frame);
+                } else {
+                    buildPane(win);
+                    float localX = pane.localX(screenX, openingScale), localY = pane.localY(screenY, openingScale);
+                    NiloreRenderer.Pane view = new NiloreRenderer.Pane(pane, opacity * reveal, windowScale, chrome,
+                            palette, dark, List.copyOf(paneRows), localX, localY);
+                    NiloreRenderer.paintPane(dc, gg, view);
+                }
+            }
+        });
+    }
+
+    private int trafficHover(double time) {
+        Win top = focused();
+        if (top == null) {
+            return -1;
+        }
+        Rect chrome = chromeRect(top);
+        if (!chrome.contains(screenX, screenY)) {
+            return -1;
+        }
+        float localX = (screenX - top.x) / scale;
+        for (int i = 0; i < 3; i++) {
+            Rect dot = trafficLight(i);
+            if (localX >= dot.x() - 5 && localX < dot.right() + 5) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private String listTitle() {
@@ -414,15 +728,112 @@ public final class NiloreClickGui extends Screen {
     // -- input --------------------------------------------------------------------
 
     @Override
-    public boolean mouseClicked(double mouseX, double mouseY, int button) {
+    public boolean mouseClicked(double x, double y, int button) {
         if (closing) {
             return true;
         }
-        setMouse(mouseX, mouseY);
+        screenX = (float) x;
+        screenY = (float) y;
+        scale = NiloreLayout.scale(width, height);
+        useLayout(modules());
+        setMouse(x, y);
         if (button == 0 && commitEditing()) {
             return true;
         }
         refresh(now());
+        Win win = windowAt(x, y);
+        if (win == null) {
+            if (button == 0) {
+                onClose();
+            }
+            return true;
+        }
+        focus(win);
+        useLayout(win);
+        setMouse(x, y);
+        refresh(now());
+
+        int handle = resizeHandle(win, x, y);
+        if (button == 0 && handle != 0) {
+            resizing = win;
+            resizeMode = handle;
+            resizeBaseW = win.w;
+            resizeBaseH = win.h;
+            dragGrabX = (float) x;
+            dragGrabY = (float) y;
+            return true;
+        }
+        if (chromeRect(win).contains(x, y)) {
+            if (button != 0) {
+                return true;
+            }
+            int dot = trafficHoverAt(win, x);
+            if (dot == 0 || dot == 1) {
+                closeWindow(win);
+                return true;
+            }
+            if (dot == 2) {
+                toggleMaximize(win);
+                return true;
+            }
+            double time = now();
+            if (lastClickWin == win.id.ordinal() && time - lastClickTime < .35
+                    && Math.abs(y - lastClickY) < 6) {
+                toggleMaximize(win);
+                lastClickWin = -1;
+                return true;
+            }
+            lastClickWin = win.id.ordinal();
+            lastClickTime = time;
+            lastClickY = (float) y;
+            dragging = win;
+            windowGrabX = (float) x - win.x;
+            windowGrabY = (float) y - win.y;
+            return true;
+        }
+        if (win.id == Id.MODULES) {
+            useLayout(win);
+            setMouse(x, y);
+            return moduleClick(button);
+        }
+        useLayout(win);
+        buildPane(win);
+        return paneClick(win, button);
+    }
+
+    private int trafficHoverAt(Win win, double x) {
+        float localX = (float) ((x - win.x) / scale);
+        for (int i = 0; i < 3; i++) {
+            Rect dot = trafficLight(i);
+            if (localX >= dot.x() - 5 && localX < dot.right() + 5) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private void toggleMaximize(Win win) {
+        if (win.maximized) {
+            win.x = win.restoreX;
+            win.y = win.restoreY;
+            win.w = win.restoreW;
+            win.h = win.restoreH;
+            win.maximized = false;
+        } else {
+            win.restoreX = win.x;
+            win.restoreY = win.y;
+            win.restoreW = win.w;
+            win.restoreH = win.h;
+            win.x = 2;
+            win.y = 2;
+            win.w = Math.max(MIN_W, (width - 4) / scale);
+            win.h = Math.max(MIN_H, (height - 4) / scale);
+            win.maximized = true;
+        }
+        clampWindows();
+    }
+
+    private boolean moduleClick(int button) {
         if (menu != null) {
             if (menuClick()) {
                 return true;
@@ -450,6 +861,15 @@ public final class NiloreClickGui extends Screen {
             if (navRects.get(i).contains(this.mouseX, this.mouseY)) {
                 if (button == 0) {
                     selectPage(i);
+                }
+                return true;
+            }
+        }
+        for (int i = 0; i < footerRects.size(); i++) {
+            if (footerRects.get(i).contains(this.mouseX, this.mouseY)) {
+                if (button == 0) {
+                    openWindow(i == 0 ? Id.SETTINGS : Id.CONFIGS);
+                    refresh(now());
                 }
                 return true;
             }
@@ -501,6 +921,8 @@ public final class NiloreClickGui extends Screen {
                         toggleOption(value, ref, i);
                     }
                 }
+                default -> {
+                }
             }
             refresh(now());
             return true;
@@ -524,17 +946,74 @@ public final class NiloreClickGui extends Screen {
             }
             return true;
         }
-        if (button == 0 && (new Rect(LIST_X, 0, LIST_W, LIST_TOP).contains(this.mouseX, this.mouseY)
-                || new Rect(0, 0, SIDEBAR_W, NAV_TOP).contains(this.mouseX, this.mouseY))) {
-            draggingWindow = true;
-            windowGrabX = (float) mouseX - viewport.x();
-            windowGrabY = (float) mouseY - viewport.y();
+        return true;
+    }
+
+    private boolean paneClick(Win win, int button) {
+        if (button != 0) {
             return true;
         }
-        if (!WINDOW.contains(this.mouseX, this.mouseY)) {
-            onClose();
+        Viewport pane = new Viewport(win.x, win.y, scale);
+        float mx = pane.localX(screenX, openingScale);
+        float my = pane.localY(screenY, openingScale);
+        if (win.id == Id.SETTINGS) {
+            for (PaneRow row : paneRows) {
+                if (row.kind() != Kind.SEGMENTED) {
+                    continue;
+                }
+                for (Pill pill : row.pills()) {
+                    if (pill.bounds().contains(mx, my)) {
+                        applyMode(row.label(), pill.label());
+                        return true;
+                    }
+                }
+            }
+            return true;
         }
+        for (PaneRow row : paneRows) {
+            if (row.kind() == Kind.INPUT && row.bounds().contains(mx, my)) {
+                configName.setFocused(true);
+                return true;
+            }
+            if (row.kind() == Kind.BUTTON && row.bounds().contains(mx, my)) {
+                saveConfig();
+                return true;
+            }
+            if (row.kind() == Kind.LIST && row.bounds().contains(mx, my)) {
+                if (!configNames.isEmpty()) {
+                    SavedConfigs.load(row.label());
+                    refresh(now());
+                }
+                return true;
+            }
+        }
+        configName.setFocused(false);
         return true;
+    }
+
+    private void applyMode(String label, String value) {
+        ClickGuiModule module = NiloreClient.getInstance().getModuleManager().getModule(ClickGuiModule.class);
+        if (module == null) {
+            return;
+        }
+        if ("Theme".equals(label)) {
+            module.niloreTheme.setValue(value);
+        } else if ("Mode".equals(label)) {
+            module.styleSetting.setValue(value);
+        }
+        refresh(now());
+    }
+
+    private void saveConfig() {
+        String name = configName.getValue().strip();
+        if (name.isEmpty() || !SavedConfigs.isValidName(name)) {
+            return;
+        }
+        SavedConfigs.save(name);
+        configName.setValue("");
+        configName.setFocused(false);
+        configsLoaded = false;
+        refresh(now());
     }
 
     private boolean chooseScrollbar() {
@@ -788,19 +1267,41 @@ public final class NiloreClickGui extends Screen {
     // -- lifecycle ----------------------------------------------------------------
 
     @Override
-    public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
+    public boolean mouseDragged(double x, double y, int button, double dragX, double dragY) {
         if (closing) {
             return true;
         }
-        setMouse(mouseX, mouseY);
+        screenX = (float) x;
+        screenY = (float) y;
         if (button != 0) {
             return false;
         }
-        if (draggingWindow) {
-            viewport = viewport(width, height, (float) mouseX - windowGrabX, (float) mouseY - windowGrabY);
-            setMouse(mouseX, mouseY);
+        if (dragging != null) {
+            dragging.x = (float) x - windowGrabX;
+            dragging.y = (float) y - windowGrabY;
+            clampWindows();
+            useLayout(dragging);
+            setMouse(x, y);
             return true;
         }
+        if (resizing != null) {
+            float dx = (float) ((x - dragGrabX) / scale);
+            float dy = (float) ((y - dragGrabY) / scale);
+            float maxW = (width - resizing.x - 4) / scale;
+            float maxH = (height - resizing.y - 4) / scale;
+            if (resizeMode == 1 || resizeMode == 3) {
+                resizing.w = clamp(resizeBaseW + dx, MIN_W, Math.min(MAX_W, maxW));
+            }
+            if (resizeMode == 2 || resizeMode == 3) {
+                resizing.h = clamp(resizeBaseH + dy, MIN_H, Math.min(MAX_H, maxH));
+            }
+            useLayout(resizing);
+            setMouse(x, y);
+            refresh(now());
+            return true;
+        }
+        useLayout(modules());
+        setMouse(x, y);
         if (draggingScroll != 0) {
             updateScrollbar();
             refresh(now());
@@ -811,30 +1312,40 @@ public final class NiloreClickGui extends Screen {
             refresh(now());
             return true;
         }
-        return super.mouseDragged(mouseX, mouseY, button, dragX, dragY);
+        return super.mouseDragged(x, y, button, dragX, dragY);
     }
 
     @Override
-    public boolean mouseReleased(double mouseX, double mouseY, int button) {
-        if (button == 0 && (draggingWindow || draggingScroll != 0 || draggingSlider != null)) {
+    public boolean mouseReleased(double x, double y, int button) {
+        if (button == 0 && (dragging != null || resizing != null || draggingScroll != 0
+                || draggingSlider != null)) {
             releaseDrag();
             return true;
         }
-        return super.mouseReleased(mouseX, mouseY, button);
+        return super.mouseReleased(x, y, button);
     }
 
     private void releaseDrag() {
-        draggingWindow = false;
+        dragging = null;
+        resizing = null;
+        resizeMode = 0;
         draggingScroll = 0;
         draggingSlider = null;
     }
 
     @Override
     public boolean mouseScrolled(double x, double y, double vertical) {
-        setMouse(x, y);
-        if (closing || draggingWindow || draggingScroll != 0 || draggingSlider != null) {
+        screenX = (float) x;
+        screenY = (float) y;
+        if (closing || dragging != null || resizing != null || draggingScroll != 0 || draggingSlider != null) {
             return true;
         }
+        Win win = windowAt(x, y);
+        if (win == null || win.id != Id.MODULES) {
+            return true;
+        }
+        useLayout(win);
+        setMouse(x, y);
         refresh(now());
         if (menu != null) {
             return true;
@@ -847,7 +1358,7 @@ public final class NiloreClickGui extends Screen {
             detailScrollTarget = clamp(detailScrollTarget - (float) vertical * 48, 0, detailMax);
             return true;
         }
-        return super.mouseScrolled(x, y, vertical);
+        return true;
     }
 
     @Override
@@ -855,6 +1366,8 @@ public final class NiloreClickGui extends Screen {
         if (closing) {
             return true;
         }
+        Win top = focused();
+        useLayout(modules());
         if (binding != null) {
             binding.setKey(keyCode == 256 || keyCode == 259 || keyCode == 261 ? 0 : keyCode);
             binding = null;
@@ -883,14 +1396,19 @@ public final class NiloreClickGui extends Screen {
         if (keyCode == 256) {
             if (menu != null && menu.open) {
                 menu.open = false;
+            } else if (configName.focused) {
+                configName.setFocused(false);
             } else if (search.focused) {
                 search.setFocused(false);
                 if (!search.value.isEmpty()) {
                     search.setValue("");
                 }
+            } else if (top != null && top.id != Id.MODULES) {
+                closeWindow(top);
             } else {
                 onClose();
             }
+            refresh(now());
             return true;
         }
         if ((modifiers & 2) != 0 && keyCode == 70) {
@@ -902,6 +1420,15 @@ public final class NiloreClickGui extends Screen {
             return true;
         }
         if (menu != null && menu.open) {
+            return true;
+        }
+        if (top != null && top.id == Id.CONFIGS && configName.focused) {
+            if (keyCode == 257 || keyCode == 335) {
+                saveConfig();
+            } else {
+                configName.keyPressed(keyCode, modifiers);
+            }
+            refresh(now());
             return true;
         }
         if (search.focused) {
@@ -936,6 +1463,12 @@ public final class NiloreClickGui extends Screen {
             }
             return true;
         }
+        Win top = focused();
+        if (top != null && top.id == Id.CONFIGS && configName.focused) {
+            configName.charTyped(codePoint);
+            refresh(now());
+            return true;
+        }
         if (!search.focused) {
             return super.charTyped(codePoint, modifiers);
         }
@@ -953,6 +1486,7 @@ public final class NiloreClickGui extends Screen {
         binding = null;
         menu = null;
         cancelEditing();
+        configName.setFocused(false);
         closing = true;
         windowMotion.to(0, now());
     }

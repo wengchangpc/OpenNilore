@@ -14,8 +14,7 @@ package client.nilore.modules.impl.movement;
  * 碰撞盒重叠时最多是 4 个(四个象限), 再多也不会改变位移。
  */
 final class SpeedGrimCollide {
-    /** 单个 tick 允许注入的最大水平增量(格/tick); 0.08 已经接近步行速度的 1/3。 */
-    private static final double MAX_BOOST = 0.08;
+    private static final double MAX_BOOST = 0.16;
     /** 速度上限的校验上界; 与模块滑块一致。 */
     private static final double MAX_LIMIT = 1.0;
     /** 服务端碰撞推挤判定同一 tick 内会考虑的实体上限。 */
@@ -23,21 +22,19 @@ final class SpeedGrimCollide {
 
     private SpeedGrimCollide() { }
 
+    /** 滑块量化/配置回读会在 0.16 上抖出 1ulp, 校验必须留容差, 否则整个模块静默归零。 */
+    private static final double EPSILON = 1.0E-9;
+
     static double increment(SpeedAccess.Collision collision, float radians, double boost, double limit) {
         if (collision == null || collision.contacts() <= 0 || !Float.isFinite(radians)
                 || !Double.isFinite(collision.motionX()) || !Double.isFinite(collision.motionZ())
-                || !Double.isFinite(boost) || boost <= 0 || boost > MAX_BOOST
-                || !Double.isFinite(limit) || limit <= 0 || limit > MAX_LIMIT) return 0;
+                || !Double.isFinite(boost) || boost <= 0 || boost > MAX_BOOST + EPSILON
+                || !Double.isFinite(limit) || limit <= 0 || limit > MAX_LIMIT + EPSILON) return 0;
         double x = collision.motionX(), z = collision.motionZ();
         double squared = x * x + z * z;
         if (squared >= limit * limit) return 0;
         double along = -Math.sin(radians) * x + Math.cos(radians) * z;
         double remaining = -along + Math.sqrt(along * along + limit * limit - squared);
         return Math.max(0, Math.min(boost * Math.min(MAX_CONTACTS, collision.contacts()), remaining));
-    }
-
-    /** 供模块读取的可调上限, 避免把常量复制到调用点。 */
-    static double maxBoost() {
-        return MAX_BOOST;
     }
 }

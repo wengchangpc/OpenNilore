@@ -18,17 +18,8 @@ public interface SpeedAccess {
      * @param motionZ  玩家当前水平运动 z 分量(格/tick)
      */
     record Collision(int contacts, double motionX, double motionZ) {
-        public static Collision none() {
-            return new Collision(0, 0.0, 0.0);
-        }
-
         public static Collision of(int contacts, double motionX, double motionZ) {
             return new Collision(contacts, motionX, motionZ);
-        }
-
-        /** 水平速度平方, 供调用方复用而不必重复乘。 */
-        public double horizontalSquared() {
-            return this.motionX * this.motionX + this.motionZ * this.motionZ;
         }
     }
 }

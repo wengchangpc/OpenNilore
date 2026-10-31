@@ -19,7 +19,6 @@ import client.nilore.utils.math.MathUtil;
 import client.nilore.utils.math.Vector2f;
 import client.nilore.utils.render.ColorUtil;
 import client.nilore.utils.render.ProjectionUtil;
-import client.nilore.utils.render.RenderUtil;
 
 public class NavenNameTag extends NameTagStyle {
     private static final int BACKDROP_COLOR = ColorUtil.fromARGB(0, 0, 0, 48);
@@ -32,8 +31,6 @@ public class NavenNameTag extends NameTagStyle {
     private static final float HEAD_GAP = 2.0f;
 
     private final Map<Entity, Vector2f> entityPositions = new ConcurrentHashMap<>();
-    private float[] blurRects = new float[16];
-    private int blurCount;
     private Paint paint;
     private FontRenderer cachedFont;
     private float cachedRasterScale = -1f;
@@ -100,7 +97,6 @@ public class NavenNameTag extends NameTagStyle {
             this.cachedRasterScale = rasterScale;
         }
         FontRenderer font = this.cachedFont;
-        this.blurCount = 0;
         if (this.paint == null) {
             this.paint = new Paint();
         }
@@ -128,9 +124,6 @@ public class NavenNameTag extends NameTagStyle {
                 ctx.save();
                 ctx.translate(screenPos.x, screenPos.y);
                 ctx.scale(scale, scale);
-                this.addBlurRect(screenPos.x + originX * scale, screenPos.y + originY * scale,
-                        boxWidth * scale, boxHeight * scale);
-
                 this.paint.setColor(BACKDROP_COLOR);
                 ctx.drawRectXYWH(originX, originY, boxWidth, boxHeight, this.paint);
                 if (ratio < 1.0f) {
@@ -144,25 +137,6 @@ public class NavenNameTag extends NameTagStyle {
                 ctx.restore();
             }
         });
-        for (int i = 0; i < this.blurCount; i++) {
-            int base = i * 4;
-            RenderUtil.drawBlurredRect(event.guiGraphics().pose(), this.blurRects[base], this.blurRects[base + 1],
-                    this.blurRects[base + 2], this.blurRects[base + 3], 0.0f, 2.0f, 0.5f, 0);
-        }
-    }
-
-    private void addBlurRect(float x, float y, float width, float height) {
-        int base = this.blurCount * 4;
-        if (base + 4 > this.blurRects.length) {
-            float[] grown = new float[this.blurRects.length * 2];
-            System.arraycopy(this.blurRects, 0, grown, 0, this.blurRects.length);
-            this.blurRects = grown;
-        }
-        this.blurRects[base] = x;
-        this.blurRects[base + 1] = y;
-        this.blurRects[base + 2] = width;
-        this.blurRects[base + 3] = height;
-        this.blurCount++;
     }
 
     @Override

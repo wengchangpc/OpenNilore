@@ -20,34 +20,36 @@ import static client.nilore.gui.nilore.NiloreLayout.*;
 /**
  * Immediate-mode painter for the Nilore click GUI.
  *
- * <p>Geometry comes from {@link NiloreLayout}, colours from {@link NiloreTheme.Palette}.
+ * <p>Geometry comes from {@link NiloreLayout}, colours from {@link NiloreTheme.Palette}. Window
+ * chrome and panes all run through the same surface so a theme switch only swaps the
+ * palette.
  */
 public final class NiloreRenderer {
-public enum Kind { SWITCH, SLIDER, SELECT, SEGMENTED, KEYBIND }
+    public enum Kind { SWITCH, SLIDER, SELECT, SEGMENTED, KEYBIND, LIST, BUTTON, INPUT }
 
-/**
- * Real font weights, the same triple the Neverlose GUI uses, plus the rasteriser's ascent/em ratio
- * measured from each face.
- *
- * <p>The metrics object reports the glyph cell from the font's own ascent, while glyphs are
- * rasterised with {@code Graphics2D}'s ascent, so the two have to be reconciled when centring.
- */
-private enum Face {
-    REGULAR(1.115f), MEDIUM(1.05f), BOLD(1.05f);
+    /**
+     * Real font weights, the same triple the Neverlose GUI uses, plus the rasteriser's ascent/em
+     * ratio measured from each face.
+     *
+     * <p>The metrics object reports the glyph cell from the font's own ascent, while glyphs are
+     * rasterised with {@code Graphics2D}'s ascent, so the two have to be reconciled when centring.
+     */
+    private enum Face {
+        REGULAR(1.115f), MEDIUM(1.05f), BOLD(1.05f);
 
-    private final float rasterAscent;
+        private final float rasterAscent;
 
-    Face(float rasterAscent) {
-        this.rasterAscent = rasterAscent;
-    }
+        Face(float rasterAscent) {
+            this.rasterAscent = rasterAscent;
+        }
 
-    FontRenderer of(float size, float rasterScale) {
-        return switch (this) {
-            case REGULAR -> FontPresets.poppinsRegular(size, rasterScale);
-            case MEDIUM -> FontPresets.poppinsMedium(size, rasterScale);
-            case BOLD -> FontPresets.poppinsBold(size, rasterScale);
-        };
-    }
+        FontRenderer of(float size, float rasterScale) {
+            return switch (this) {
+                case REGULAR -> FontPresets.poppinsRegular(size, rasterScale);
+                case MEDIUM -> FontPresets.poppinsMedium(size, rasterScale);
+                case BOLD -> FontPresets.poppinsBold(size, rasterScale);
+            };
+        }
     }
 
     public record Editor(String value, boolean focused) {
@@ -79,16 +81,27 @@ private enum Face {
     public record Menu(Rect bounds, float reveal, List<MenuOption> options) {
     }
 
-    public record Frame(Viewport viewport, float opacity, float openingScale, float selectionY, Palette palette,
-                        boolean dark, String navLabel, List<Nav> nav, Editor search, String listTitle,
-                        List<Note> notes, float listScroll, float listMax, Detail detail, float detailScroll,
-                        float detailMax, Menu menu, float mouseX, float mouseY) {
+    public record Chrome(String title, boolean focused, boolean maximized, int hoverDot) {
+    }
+
+    public record PaneRow(Kind kind, Rect bounds, Rect control, String label, String value, float progress,
+                          boolean hovered, boolean active, boolean editing, List<Pill> pills) {
+    }
+
+    public record Pane(Viewport viewport, float opacity, float openingScale, Chrome chrome, Palette palette,
+                       boolean dark, List<PaneRow> rows, float mouseX, float mouseY) {
+    }
+
+    public record Frame(Viewport viewport, float opacity, float openingScale, Chrome chrome, float selectionY,
+                        Palette palette, boolean dark, String navLabel, List<Nav> nav, List<Nav> footer,
+                        Editor search, String listTitle, List<Note> notes, float listScroll, float listMax,
+                        Detail detail, float detailScroll, float detailMax, Menu menu, float mouseX, float mouseY) {
     }
 
     private NiloreRenderer() {
     }
 
-    public static void paint(DrawContext dc, GuiGraphics gg, Frame frame) {
+    public static void paintModules(DrawContext dc, GuiGraphics gg, Frame frame) {
         Viewport viewport = frame.viewport();
         Palette palette = frame.palette();
         dc.save();
@@ -102,20 +115,7 @@ private enum Face {
             Surface surface = new Surface(dc, clip, palette, frame.opacity(), frame.dark(),
                     Fonts.deviceScale(viewport.scale()));
 
-            // Frosted backdrop, then the window's translucent fill (no drop shadow behind it).
-            Rect screenWindow = viewport.screen(WINDOW, frame.openingScale());
-            RenderUtil.drawBlurredRect(gg.pose(), screenWindow.x(), screenWindow.y(), screenWindow.width(),
-                    screenWindow.height(), RADIUS * screenScale, Math.max(6f, 32f * screenScale),
-                    Math.min(1f, frame.opacity()), 0xFF000000);
-            surface.rounded(WINDOW, RADIUS, palette.window);
-
-            // Panes: only the two outer edges keep the window's rounded corners.
-            surface.corners(new Rect(0, 0, SIDEBAR_W, HEIGHT), RADIUS, 0, 0, RADIUS, palette.sidebar);
-            surface.rounded(new Rect(LIST_X, 0, LIST_W, HEIGHT), 0, palette.list);
-            surface.corners(new Rect(DETAIL_X, 0, DETAIL_W, HEIGHT), 0, RADIUS, RADIUS, 0, palette.detail);
-            surface.rounded(new Rect(SIDEBAR_W - .5f, 0, 1, HEIGHT), 0, palette.separator);
-            surface.rounded(new Rect(DETAIL_X - .5f, 0, 1, HEIGHT), 0, palette.separator);
-            surface.border(WINDOW, RADIUS, palette.hairline);
+            shell(surface, gg, frame, screenScale);
 
             clip.push(new Rect(0, 0, SIDEBAR_W, HEIGHT));
             surface.sidebar(frame);
@@ -148,9 +148,65 @@ private enum Face {
             if (frame.menu() != null) {
                 surface.menu(frame.menu());
             }
+            surface.chrome(frame.chrome());
         } finally {
             dc.restore();
         }
+    }
+
+    public static void paintPane(DrawContext dc, GuiGraphics gg, Pane pane) {
+        Viewport viewport = pane.viewport();
+        dc.save();
+        try {
+            dc.translate(viewport.x() + WIDTH * viewport.scale() / 2, viewport.y() + HEIGHT * viewport.scale() / 2);
+            dc.scale(viewport.scale() * pane.openingScale(), viewport.scale() * pane.openingScale());
+            dc.translate(-WIDTH / 2, -HEIGHT / 2);
+
+            float screenScale = viewport.scale() * pane.openingScale();
+            Clipper clip = new Clipper(viewport, pane.openingScale());
+            Surface surface = new Surface(dc, clip, pane.palette(), pane.opacity(), pane.dark(),
+                    Fonts.deviceScale(viewport.scale()));
+            Rect screenWindow = viewport.screen(WINDOW, pane.openingScale());
+            RenderUtil.drawBlurredRect(gg.pose(), screenWindow.x(), screenWindow.y(), screenWindow.width(),
+                    screenWindow.height(), RADIUS * screenScale, Math.max(4f, NiloreTheme.Effects.BLUR * screenScale),
+                    Math.min(1f, pane.opacity()), 0xFF000000);
+            surface.shadow(WINDOW, RADIUS, pane.palette().shadow, NiloreTheme.Effects.SHADOW_OFFSET,
+                    NiloreTheme.Effects.SHADOW_BLUR);
+            surface.rounded(WINDOW, RADIUS, pane.palette().window);
+            surface.corners(new Rect(0, CONTENT_TOP, WIDTH, HEIGHT - CONTENT_TOP), 0, 0, RADIUS, RADIUS,
+                    pane.palette().detail);
+            surface.border(WINDOW, RADIUS, pane.palette().hairline);
+
+            clip.push(new Rect(0, CONTENT_TOP, WIDTH, HEIGHT - CONTENT_TOP));
+            for (PaneRow row : pane.rows()) {
+                surface.paneRow(row);
+            }
+            clip.pop();
+            surface.chrome(pane.chrome());
+        } finally {
+            dc.restore();
+        }
+    }
+
+    private static void shell(Surface surface, GuiGraphics gg, Frame frame, float screenScale) {
+        Rect screenWindow = frame.viewport().screen(WINDOW, frame.openingScale());
+        RenderUtil.drawBlurredRect(gg.pose(), screenWindow.x(), screenWindow.y(), screenWindow.width(),
+                screenWindow.height(), RADIUS * screenScale, Math.max(4f, NiloreTheme.Effects.BLUR * screenScale),
+                Math.min(1f, frame.opacity()), 0xFF000000);
+        surface.shadow(WINDOW, RADIUS, frame.palette().shadow, NiloreTheme.Effects.SHADOW_OFFSET,
+                NiloreTheme.Effects.SHADOW_BLUR);
+        surface.rounded(WINDOW, RADIUS, frame.palette().window);
+
+        surface.corners(new Rect(0, CONTENT_TOP, SIDEBAR_W, HEIGHT - CONTENT_TOP), 0, 0, 0, RADIUS,
+                frame.palette().sidebar);
+        surface.rounded(new Rect(LIST_X, CONTENT_TOP, LIST_W, HEIGHT - CONTENT_TOP), 0, frame.palette().list);
+        surface.corners(new Rect(DETAIL_X, CONTENT_TOP, DETAIL_W, HEIGHT - CONTENT_TOP), 0, 0, RADIUS, 0,
+                frame.palette().detail);
+        surface.rounded(new Rect(SIDEBAR_W - .5f, CONTENT_TOP, 1, HEIGHT - CONTENT_TOP), 0,
+                frame.palette().separator);
+        surface.rounded(new Rect(DETAIL_X - .5f, CONTENT_TOP, 1, HEIGHT - CONTENT_TOP), 0,
+                frame.palette().separator);
+        surface.border(WINDOW, RADIUS, frame.palette().hairline);
     }
 
     /**
@@ -169,6 +225,9 @@ private enum Face {
         }
 
         void push(Rect local) {
+            if (viewport == null) {
+                return;
+            }
             Rect screen = viewport.screen(local, openingScale);
             int minX = (int) Math.floor(screen.x()), minY = (int) Math.floor(screen.y());
             int width = (int) Math.ceil(screen.right()) - minX, height = (int) Math.ceil(screen.bottom()) - minY;
@@ -176,6 +235,9 @@ private enum Face {
         }
 
         void pop() {
+            if (viewport == null) {
+                return;
+            }
             RenderUtil.popScissor();
         }
     }
@@ -242,6 +304,10 @@ private enum Face {
             String shown = maxWidth > 0 ? elide(value, font, maxWidth) : value;
             GlHelper.drawText(shown, centerX - GlHelper.getStringWidth(shown, font) / 2f,
                     textTop(face, font, size, centerY), font, col(color));
+        }
+
+        float width(String value, Face face, float size) {
+            return GlHelper.getStringWidth(value, face.of(size, this.rasterScale));
         }
 
         String elide(String value, FontRenderer font, float width) {
@@ -324,15 +390,49 @@ private enum Face {
             }
         }
 
+        // -- window chrome --------------------------------------------------------
+
+        void chrome(Chrome chrome) {
+            corners(new Rect(0, 0, WIDTH, TITLEBAR_H), RADIUS, RADIUS, 0, 0, palette.chrome);
+            for (int i = 0; i < 3; i++) {
+                Rect dot = trafficLight(i);
+                float cx = dot.x() + dot.width() / 2f, cy = dot.y() + dot.height() / 2f;
+                int color = !chrome.focused() ? palette.controlIdle
+                        : i == 0 ? palette.close : i == 1 ? palette.minimize : palette.maximize;
+                circle(cx, cy, dot.width() / 2f, color);
+                if (chrome.hoverDot() == i) {
+                    trafficGlyph(i, cx, cy);
+                }
+            }
+            textCenter(chrome.title(), WIDTH / 2f, TITLEBAR_H / 2f, Face.MEDIUM, SZ_BODY,
+                    chrome.focused() ? palette.titleFocused : palette.titleIdle, WIDTH * .6f);
+        }
+
+        private void trafficGlyph(int index, float cx, float cy) {
+            int color = palette.controlGlyph;
+            switch (index) {
+                case 0 -> {
+                    stroke(cx - 2.6f, cy - 2.6f, cx + 2.6f, cy + 2.6f, 1.5f, color);
+                    stroke(cx - 2.6f, cy + 2.6f, cx + 2.6f, cy - 2.6f, 1.5f, color);
+                }
+                case 1 -> stroke(cx - 3, cy, cx + 3, cy, 1.5f, color);
+                default -> {
+                    stroke(cx - 3, cy, cx + 3, cy, 1.5f, color);
+                    stroke(cx, cy - 3, cx, cy + 3, 1.5f, color);
+                }
+            }
+        }
+
         // -- widgets --------------------------------------------------------------
 
         void toggle(Rect bounds, float progress) {
-            rounded(bounds, bounds.height() / 2f, blend(palette.switchOff, palette.green, progress));
+            rounded(bounds, bounds.height() / 2f, blend(palette.switchOff, palette.switchOn, progress));
             float radius = SWITCH_KNOB / 2f;
-            float x = bounds.x() + SWITCH_PAD + radius + progress * 20f;
+            float travel = bounds.width() - SWITCH_PAD * 2 - SWITCH_KNOB;
+            float x = bounds.x() + SWITCH_PAD + radius + progress * travel;
             float y = bounds.y() + bounds.height() / 2f;
-            circle(x, y + 1.5f, radius + 1.5f, 0x14000000);
-            circle(x, y, radius, 0xFFFFFFFF);
+            circle(x, y + 1.5f, radius + 1.5f, NiloreTheme.Effects.KNOB_SHADOW);
+            circle(x, y, radius, palette.switchKnob);
         }
 
         void slider(Rect track, float progress, boolean active) {
@@ -342,10 +442,10 @@ private enum Face {
             rounded(new Rect(track.x(), barY, track.width(), SLIDER_TRACK), SLIDER_TRACK / 2f, palette.field);
             if (progress > 0) {
                 rounded(new Rect(track.x(), barY, track.width() * progress, SLIDER_TRACK), SLIDER_TRACK / 2f,
-                        palette.blue);
+                        palette.accent);
             }
-            circle(knobX, centerY + 1f, SLIDER_KNOB / 2f + 1.5f, 0x1F000000);
-            circle(knobX, centerY, SLIDER_KNOB / 2f + (active ? .6f : 0), 0xFFFFFFFF);
+            circle(knobX, centerY + 1f, SLIDER_KNOB / 2f + 1.5f, NiloreTheme.Effects.KNOB_SHADOW);
+            circle(knobX, centerY, SLIDER_KNOB / 2f + (active ? .6f : 0), palette.switchKnob);
         }
 
         void selectBox(Rect bounds, String value) {
@@ -375,33 +475,39 @@ private enum Face {
         // -- panes ----------------------------------------------------------------
 
         void sidebar(Frame frame) {
-            text("Nilore", BRAND_TEXT_X, BRAND_CENTER_Y, Face.BOLD, SZ_BRAND, palette.text,
-                    SIDEBAR_W - SIDE_PAD_X - BRAND_TEXT_X);
-
-            text(frame.navLabel(), SIDE_PAD_X + NAV_LABEL_PAD_X, NAV_LABEL_CENTER, Face.BOLD,
+            text(frame.navLabel(), SIDE_PAD_X + NAV_LABEL_PAD_X, NAV_LABEL_CENTER, Face.MEDIUM,
                     SZ_SMALL, palette.secondary, SIDEBAR_W - 40);
             rounded(new Rect(SIDE_PAD_X, frame.selectionY(), SIDEBAR_W - SIDE_PAD_X * 2, NAV_H),
                     NAV_RADIUS, palette.accentSoft);
             for (int i = 0; i < frame.nav().size(); i++) {
                 Nav nav = frame.nav().get(i);
-                Rect bounds = navItem(i);
-                if (nav.hovered() && !nav.active()) {
-                    rounded(bounds, NAV_RADIUS, palette.navHover);
-                }
-                float centerY = bounds.y() + bounds.height() / 2f;
-                icon(nav.icon(), bounds.x() + NAV_PAD + NAV_ICON / 2f, centerY, 19, palette.text);
-                text(nav.label(), bounds.x() + NAV_PAD + NAV_ICON + NAV_ICON_GAP, centerY,
-                        Face.REGULAR, SZ_NAV, palette.text,
-                        bounds.width() - NAV_PAD * 2 - NAV_ICON - NAV_ICON_GAP - 26);
-                String count = Integer.toString(nav.count());
-                textRight(count, bounds.right() - NAV_PAD, centerY, Face.REGULAR, SZ_COUNT, palette.secondary,
-                        bounds.width());
+                navRow(navItem(i), nav, true);
+            }
+            for (int i = 0; i < frame.footer().size(); i++) {
+                navRow(footerItem(i), frame.footer().get(i), false);
+            }
+        }
+
+        private void navRow(Rect bounds, Nav nav, boolean withCount) {
+            if (nav.hovered() && !nav.active()) {
+                rounded(bounds, NAV_RADIUS, palette.navHover);
+            }
+            float centerY = bounds.y() + bounds.height() / 2f;
+            icon(nav.icon(), bounds.x() + NAV_PAD + NAV_ICON / 2f, centerY, 19,
+                    nav.active() ? palette.accent : palette.text);
+            text(nav.label(), bounds.x() + NAV_PAD + NAV_ICON + NAV_ICON_GAP, centerY,
+                    nav.active() ? Face.MEDIUM : Face.REGULAR, SZ_NAV,
+                    nav.active() ? palette.accent : palette.text,
+                    bounds.width() - NAV_PAD * 2 - NAV_ICON - NAV_ICON_GAP - 26);
+            if (withCount) {
+                textRight(Integer.toString(nav.count()), bounds.right() - NAV_PAD, centerY, Face.REGULAR, SZ_COUNT,
+                        palette.secondary, bounds.width());
             }
         }
 
         void search(Frame frame) {
             Rect box = searchBox();
-            rounded(box, box.height() / 2f, palette.field);
+            rounded(box, NiloreTheme.Radius.CONTROL, palette.field);
             float ix = box.x() + SEARCH_INNER_PAD;
             float iy = box.y() + (box.height() - SEARCH_ICON) / 2f;
             float k = SEARCH_ICON / 20f;
@@ -419,7 +525,7 @@ private enum Face {
             if (editor.focused() && System.nanoTime() / 500_000_000 % 2 == 0) {
                 FontRenderer font = Face.REGULAR.of(SZ_BODY, this.rasterScale);
                 float caret = textX + GlHelper.getStringWidth(editor.value(), font) + 1.5f;
-                stroke(caret, cy - 8, caret, cy + 8, 1.4f, palette.blue);
+                stroke(caret, cy - 8, caret, cy + 8, 1.4f, palette.accent);
             }
         }
 
@@ -429,7 +535,7 @@ private enum Face {
                         SZ_LABEL, palette.secondary, LIST_W - 40);
                 return;
             }
-            text(frame.listTitle(), LIST_CONTENT_X + GROUP_TITLE_PAD_X, LIST_GROUP_TITLE_CENTER,
+            text(frame.listTitle(), LIST_X + LIST_PAD_X + GROUP_TITLE_PAD_X, LIST_GROUP_TITLE_CENTER,
                     Face.MEDIUM, SZ_GROUP, palette.secondary, LIST_CONTENT_W - GROUP_TITLE_PAD_X * 2);
             for (Note note : frame.notes()) {
                 Rect bounds = note.bounds();
@@ -495,7 +601,7 @@ private enum Face {
                     text(row.label(), contentX, centerY, Face.REGULAR, SZ_LABEL, palette.text,
                             contentRight - contentX - row.control().width() - NOTE_GAP);
                     if (row.editing()) {
-                        rounded(row.control(), SELECT_RADIUS, 0x2E767680);
+                        rounded(row.control(), SELECT_RADIUS, palette.selectEditing);
                     }
                     selectBox(row.control(), row.value());
                 }
@@ -504,16 +610,16 @@ private enum Face {
                             palette.text, row.valueBox().x() - contentX - 8);
                     if (row.editing()) {
                         textRight(row.value(), contentRight, bounds.y() + COL_PAD_TOP + ROW_LABEL_H / 2f,
-                                Face.REGULAR, SZ_BODY, palette.blue, row.valueBox().width());
+                                Face.REGULAR, SZ_BODY, palette.accent, row.valueBox().width());
                         if (System.nanoTime() / 500_000_000 % 2 == 0) {
                             FontRenderer font = Face.REGULAR.of(SZ_BODY, this.rasterScale);
                             float caret = contentRight - GlHelper.getStringWidth(row.value(), font) - 2f;
                             stroke(caret, bounds.y() + COL_PAD_TOP + 2, caret,
-                                    bounds.y() + COL_PAD_TOP + ROW_LABEL_H - 2, 1.4f, palette.blue);
+                                    bounds.y() + COL_PAD_TOP + ROW_LABEL_H - 2, 1.4f, palette.accent);
                         }
                     } else {
                         textRight(row.value(), contentRight, bounds.y() + COL_PAD_TOP + ROW_LABEL_H / 2f,
-                                Face.REGULAR, SZ_BODY, row.hovered() ? palette.blue : palette.secondary,
+                                Face.REGULAR, SZ_BODY, row.hovered() ? palette.accent : palette.secondary,
                                 row.valueBox().width());
                     }
                     slider(row.control(), row.progress(), row.hovered());
@@ -526,10 +632,56 @@ private enum Face {
                 case KEYBIND -> {
                     text(row.label(), contentX, centerY, Face.REGULAR, SZ_LABEL, palette.text,
                             contentRight - contentX - row.control().width() - NOTE_GAP);
-                    rounded(row.control(), SELECT_RADIUS, row.editing() ? 0x24FF3B30 : palette.field);
+                    rounded(row.control(), SELECT_RADIUS, row.editing() ? palette.accentSoft : palette.field);
                     textCenter(row.value(), row.control().x() + row.control().width() / 2f, centerY,
                             row.editing() ? Face.BOLD : Face.REGULAR, SZ_BODY,
-                            row.editing() ? palette.red : palette.text, row.control().width() - 20);
+                            row.editing() ? palette.accent : palette.text, row.control().width() - 20);
+                }
+                default -> {
+                }
+            }
+        }
+
+        void paneRow(PaneRow row) {
+            Rect bounds = row.bounds();
+            float centerY = bounds.y() + bounds.height() / 2f;
+            float padX = 16;
+            float contentX = bounds.x() + padX;
+            float contentRight = bounds.right() - padX;
+            switch (row.kind()) {
+                case SEGMENTED -> {
+                    text(row.label(), contentX, bounds.y() + COL_PAD_TOP + ROW_LABEL_H / 2f, Face.REGULAR, SZ_LABEL,
+                            palette.text, contentRight - contentX);
+                    segmented(row.control(), row.pills());
+                }
+                case LIST -> {
+                    if (row.hovered()) {
+                        rounded(bounds, NiloreTheme.Radius.ROW, palette.rowHover);
+                    }
+                    text(row.label(), contentX, centerY, row.active() ? Face.MEDIUM : Face.REGULAR, SZ_LABEL,
+                            row.active() ? palette.accent : palette.text, contentRight - contentX - 60);
+                    textRight(row.value(), contentRight, centerY, Face.REGULAR, SZ_COUNT, palette.secondary, 80);
+                }
+                case BUTTON -> {
+                    rounded(bounds, NiloreTheme.Radius.CONTROL,
+                            row.hovered() ? palette.accent : palette.accentSoft);
+                    textCenter(row.label(), bounds.x() + bounds.width() / 2f, centerY, Face.MEDIUM, SZ_BODY,
+                            row.hovered() ? palette.switchKnob : palette.accent, bounds.width() - 16);
+                }
+                case INPUT -> {
+                    rounded(bounds, NiloreTheme.Radius.CONTROL, palette.field);
+                    if (row.editing()) {
+                        border(bounds, NiloreTheme.Radius.CONTROL, palette.accent);
+                    }
+                    String shown = row.value().isEmpty() ? row.label() : row.value();
+                    text(shown, contentX, centerY, Face.REGULAR, SZ_BODY,
+                            row.value().isEmpty() ? palette.secondary : palette.text, bounds.width() - padX * 2 - 4);
+                    if (row.editing() && System.nanoTime() / 500_000_000 % 2 == 0) {
+                        float caret = contentX + width(row.value(), Face.REGULAR, SZ_BODY) + 1.5f;
+                        stroke(caret, centerY - 8, caret, centerY + 8, 1.4f, palette.accent);
+                    }
+                }
+                default -> {
                 }
             }
         }
@@ -542,7 +694,8 @@ private enum Face {
 
         void menu(Menu menu) {
             Rect bounds = menu.bounds();
-            shadow(bounds, MENU_RADIUS, dark ? 0x73000000 : 0x380F172A, 8, 34);
+            shadow(bounds, MENU_RADIUS, palette.shadow, NiloreTheme.Effects.SHADOW_OFFSET,
+                    NiloreTheme.Effects.SHADOW_BLUR);
             rounded(bounds, MENU_RADIUS, palette.popover);
             border(bounds, MENU_RADIUS, palette.separator);
             clip.push(new Rect(bounds.x() + 1, bounds.y() + MENU_PAD, bounds.width() - 2,
@@ -558,7 +711,7 @@ private enum Face {
                         option.selected() ? Face.MEDIUM : Face.REGULAR, SZ_BODY, palette.text,
                         item.width() - 9 - MENU_CHECK - 12);
                 if (option.selected()) {
-                    check(item.right() - 9 - MENU_CHECK / 2f, item.y() + MENU_OPTION_H / 2f, palette.blue);
+                    check(item.right() - 9 - MENU_CHECK / 2f, item.y() + MENU_OPTION_H / 2f, palette.accent);
                 }
             }
             clip.pop();
@@ -638,6 +791,18 @@ private enum Face {
                     line(x, y, s, 14.67f, 16.8f, 18, 18.6f, w, color);
                     dot(x, y, s, 8.5f, 11, 1.15f, color);
                     dot(x, y, s, 13.5f, 11, 1.15f, color);
+                }
+                case 7 -> { // folder
+                    curve(x, y, s, 3, 6.5f, 3, 5.12f, 4.12f, 4, 5.5f, 4, w, color);
+                    line(x, y, s, 5.5f, 4, 9, 4, w, color);
+                    line(x, y, s, 9, 4, 10.6f, 6, w, color);
+                    line(x, y, s, 10.6f, 6, 18.5f, 6, w, color);
+                    curve(x, y, s, 18.5f, 6, 19.88f, 6, 21, 7.12f, 21, 8.5f, w, color);
+                    line(x, y, s, 21, 8.5f, 21, 16.2f, w, color);
+                    curve(x, y, s, 21, 16.2f, 21, 17.58f, 19.88f, 18.7f, 18.5f, 18.7f, w, color);
+                    line(x, y, s, 18.5f, 18.7f, 5.5f, 18.7f, w, color);
+                    curve(x, y, s, 5.5f, 18.7f, 4.12f, 18.7f, 3, 17.58f, 3, 16.2f, w, color);
+                    line(x, y, s, 3, 16.2f, 3, 6.5f, w, color);
                 }
                 default -> {
                 }

@@ -72,7 +72,7 @@ COMBAT, MOVEMENT, PLAYER, RENDER, EXPLOIT, WORLD, MISC
 - `esp/`: ArrowEspColor, ClassEspColor, EspColorProvider, PotionEspColor
 - `nametag/`: NameTagStyle, OpalNameTag, SimpleNameTag
 
-**world/ (8)**: AntiStaff, AutoPlay, AutoTools, BlockIn, Debugger, Protocol, Teams, WebUI
+**world/ (9)**: AntiStaff, AutoPlay, AutoTools, BlockIn, Debugger, PacketBreak, Protocol, Teams, WebUI
 
 ## Patch 列表 (client.nilore.patch) — 26 个
 BlockOcclusionCachePatch, CallbackInfo, ChatScreenPatch, ClientLevelPatch, ConnectionPatch, EntityPatch, EntityRenderDispatcherPatch, EntityRendererPatch, FriendlyByteBufPatch, GameRendererPatch, GuiPatch, HumanoidModelPatch, ItemInHandLayerPatch, ItemInHandRendererPatch, ItemPatch, KeyboardHandlerPatch, KeyboardInputPatch, LevelRendererPatch, LivingEntityPatch, LivingEntityRendererPatch, LocalPlayerPatch, MinecraftPatch, PacketUtilsPatch, PlayerPatch, PlayerTabOverlayPatch, TimerPatch

@@ -61,6 +61,7 @@ import client.nilore.modules.impl.world.AutoPlay;
 import client.nilore.modules.impl.world.AutoTools;
 import client.nilore.modules.impl.world.BlockIn;
 import client.nilore.modules.impl.world.Debugger;
+import client.nilore.modules.impl.world.PacketBreak;
 import client.nilore.modules.impl.world.Teams;
 import client.nilore.modules.impl.world.Protocol;
 import client.nilore.modules.impl.world.WebUI;
@@ -130,6 +131,7 @@ public class ModuleManager extends ClientBase {
         this.register(new AspectRatio());
         this.register(new BetterChat());
         this.register(new BetterFPS());
+        this.register(new TerrainLOD());
         this.register(new ChestESP());
         this.register(new ClickGuiModule());
         this.register(new Compass());
@@ -158,6 +160,7 @@ public class ModuleManager extends ClientBase {
         this.register(new AutoTools());
         this.register(new BlockIn());
         this.register(new Debugger());
+        this.register(new PacketBreak());
         this.register(new Teams());
         this.register(new WebUI());
         this.register(new Protocol());

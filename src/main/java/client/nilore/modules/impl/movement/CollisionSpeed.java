@@ -3,6 +3,7 @@ package client.nilore.modules.impl.movement;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.decoration.ArmorStand;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.FishingHook;
 import net.minecraft.world.entity.vehicle.Boat;
 import net.minecraft.world.entity.vehicle.Minecart;
@@ -12,46 +13,22 @@ import net.minecraft.world.scores.Team;
 import client.nilore.event.impl.MotionEvent;
 import client.nilore.modules.Category;
 import client.nilore.modules.Module;
-import client.nilore.settings.impl.BooleanSetting;
 import client.nilore.settings.impl.NumberSetting;
 import client.nilore.utils.game.MovementUtil;
 import client.nilore.event.EventTarget;
 
-/**
- * 实体碰撞加速。
- *
- * <p>原实现(自 d3838b2 恢复)把增量写死成 {@code 0.065 * min(4, contacts)} 再整块塞进水平
- * 速度里, 那个值既不看当前速度也不看还能吃下多少: 贴着人走的时候常常直接把水平速度顶到
- * 服务端预测上限之外, 于是 Grim 的 prediction 每 tick 都要为一段无法解释的位移找理由。
- *
- * <p>现在增量交给 {@link SpeedGrimCollide#increment} 解析求解: 先算出当前水平速度在移动
- * 方向上的投影, 再解出"投影正好落在 limit 圆上"所需的步长, 取它与剩余余量的较小值。
- * 两个性质因此是构造性成立的: 结果非负, 且叠加后的水平速度永远不会越过 {@code limit}。
- */
 public class CollisionSpeed extends Module {
-    /**
-     * 判定碰撞用的 AABB 外扩量。
-     *
-     * <p>0.6 格换算成中心距约 0.3(自身半宽) + 0.6 + 0.3(目标半宽) ≈ 1.2 格，比绕圈半径
-     * （0.65~1.0）还大 —— 判定比实际接触还宽 0.4 格。收到 0.2 后中心距约 0.8 格，
-     * 正好落在绕圈半径里：贴上去才算接触，不会隔着半格就判定成推挤。
-     */
     private static final double COLLISION_EXPAND = 0.2;
-    /** 单实体的基础增量(格/tick), 再乘接触数量。 */
-    private static final double BASE_BOOST = 0.065;
-    /**
-     * 叠加后允许出现的最大水平速度。疾跑跳跃的水平速度约 0.33, 留一点余量取 0.34;
-     * 超过这个值就说明增量根本没有空间, 此时增量函数自己返回 0。
-     */
-    private static final double SPEED_LIMIT = 0.34;
+    private static final double FULL_CONTACT = 0.0;
+    private static final double MAX_CONTACT = 1.0;
+    private static final double MIN_FALLOFF = 0.5;
+    private static final double SPEED_LIMIT = 0.40;
 
-    public final BooleanSetting onlyInAir = new BooleanSetting("Only Air", true);
-    public final BooleanSetting strafeBoost = new BooleanSetting("Strafe Boost", true);
-
-    /** 单实体基础增量(格/tick); 上界与 {@link SpeedGrimCollide} 的入参校验一致。 */
-    public final NumberSetting boost = new NumberSetting("Boost", BASE_BOOST, 0.005, 0.08, 0.005);
-    /** 叠加后允许达到的最大水平速度(格/tick)。疾跑跳跃约 0.33。 */
+    public final NumberSetting boost = new NumberSetting("Boost", 0.16, 0.005, 0.16, 0.005);
     public final NumberSetting speedLimit = new NumberSetting("Speed Limit", SPEED_LIMIT, 0.20, 1.0, 0.01);
+
+    /** 最近一个接触者的水平间隙(格), 无接触时保持 MAX_VALUE。 */
+    private double nearestContact;
 
     public CollisionSpeed() {
         super("CollisionSpeed", Category.MOVEMENT);
@@ -62,11 +39,11 @@ public class CollisionSpeed extends Module {
         if (!motionEvent.isPost()
                 || mc.player == null
                 || mc.level == null
-                || !MovementUtil.isInputActive()
-                || (this.onlyInAir.getValue() && mc.player.onGround())) {
+                || !MovementUtil.isInputActive()) {
             return;
         }
 
+        this.nearestContact = Double.MAX_VALUE;
         int contacts = this.countContacts();
         if (contacts <= 0) {
             return;
@@ -75,15 +52,13 @@ public class CollisionSpeed extends Module {
         Vec3 motion = mc.player.getDeltaMovement();
         SpeedAccess.Collision collision = SpeedAccess.Collision.of(contacts, motion.x, motion.z);
 
-        double yawRad = MovementUtil.getMovementYaw();
-        if (this.strafeBoost.getValue() && TargetStrafe.isOrbiting()) {
-            // 和输入方向用同一条平滑朝向。以前这里拿的是"纯切向"，与输入里的径向分量
-            // 差十几度，两股力合成的位移既不是切向也不是径向 —— 绕圈时左右摆动就是这么来的。
-            yawRad = TargetStrafe.orbitYawRad();
-        }
+        double horizontal = Math.hypot(motion.x, motion.z);
+        double yawRad = horizontal > 1.0E-4
+                ? Math.atan2(-motion.x, motion.z)
+                : MovementUtil.getMovementYaw();
 
         double increment = SpeedGrimCollide.increment(collision, (float) yawRad,
-                this.boost.getValue().doubleValue(),
+                this.boost.getValue().doubleValue() * this.falloff(),
                 this.speedLimit.getValue().doubleValue());
         if (increment <= 0.0) {
             return;
@@ -93,11 +68,20 @@ public class CollisionSpeed extends Module {
 
     /** 统计这一 tick 会被服务端算作推挤来源的实体数量。 */
     private int countContacts() {
-        AABB box = mc.player.getBoundingBox().inflate(COLLISION_EXPAND);
+        AABB playerBox = mc.player.getBoundingBox();
+        AABB search = playerBox.inflate(COLLISION_EXPAND);
         int contacts = 0;
-        for (Entity entity : mc.level.entitiesForRendering()) {
-            if (!isPusher(entity) || !this.collidesWith(entity, box)) {
+        for (Entity entity : mc.level.getEntities(mc.player, search)) {
+            if (!isPusher(entity)) {
                 continue;
+            }
+            AABB target = entity.getBoundingBox();
+            if (!search.intersects(target)) {
+                continue;
+            }
+            double gap = horizontalGap(playerBox, target);
+            if (gap < this.nearestContact) {
+                this.nearestContact = gap;
             }
             if (++contacts >= 4) {
                 // 服务端同一 tick 最多只处理四个象限的推挤, 再数下去也不会改变位移。
@@ -107,6 +91,29 @@ public class CollisionSpeed extends Module {
         return contacts;
     }
 
+    /** 两个碰撞盒在水平面上的最近距离；重叠时为 0。 */
+    private static double horizontalGap(AABB a, AABB b) {
+        double dx = Math.max(0.0, Math.max(a.minX - b.maxX, b.minX - a.maxX));
+        double dz = Math.max(0.0, Math.max(a.minZ - b.maxZ, b.minZ - a.maxZ));
+        return Math.hypot(dx, dz);
+    }
+
+    private double falloff() {
+        if (this.nearestContact <= FULL_CONTACT) {
+            return 1.0;
+        }
+        if (this.nearestContact >= MAX_CONTACT) {
+            return 0.0;
+        }
+        return Math.max(MIN_FALLOFF, (MAX_CONTACT - this.nearestContact) / (MAX_CONTACT - FULL_CONTACT));
+    }
+
+    /**
+     * 谁会被服务端当成推挤来源。只按 Entity 类型筛，队伍/碰撞规则交给 {@link #canPush}。
+     *
+     * <p>这里刻意不收窄到 {@code Player}：船、矿车、钓钩、其它 LivingEntity 在服务端同样参与
+     * 实体推挤判定，漏掉它们会让 {@code contacts} 直接归零。
+     */
     private boolean isPusher(Entity entity) {
         if (entity == mc.player || !entity.isAlive() || entity instanceof ArmorStand) {
             return false;
@@ -115,17 +122,22 @@ public class CollisionSpeed extends Module {
             // 客户端为水域/实体碰撞生成的虚拟占位 id, 不是真实实体。
             return false;
         }
+        if (entity instanceof Player player && player.isSpectator()) {
+            return false;
+        }
         if (!(entity instanceof LivingEntity || entity instanceof Boat || entity instanceof Minecart || entity instanceof FishingHook)) {
             return false;
         }
         return this.canPush(entity);
     }
 
-    private boolean collidesWith(Entity entity, AABB box) {
-        return box.intersects(entity.getBoundingBox());
-    }
-
-    /** 队伍碰撞规则: ALLOW / PUSH_OWN_TEAM / PUSH_OTHER_TEAMS, 与 sentinel 一致。 */
+    /**
+     * 队伍碰撞规则: ALWAYS / PUSH_OWN_TEAM / PUSH_OTHER_TEAMS, 与 sentinel 一致。
+     *
+     * <p>这里已经完整表达了"能不能被这个实体推动"：{@code ALWAYS} 无视队伍，其余按
+     * 同盟关系分别对应 PUSH_OWN_TEAM / PUSH_OTHER_TEAMS。再叠一层"必须是敌人"的判定
+     * 会把 collisionRule=ALWAYS 的同队实体也一起排掉，等于把 contacts 判成 0。
+     */
     private boolean canPush(Entity entity) {
         if (mc.player.getTeam() == null || entity.getTeam() == null) {
             return true;
