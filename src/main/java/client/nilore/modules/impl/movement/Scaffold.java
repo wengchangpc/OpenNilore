@@ -5,15 +5,11 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.BufferBuilder;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.Tesselator;
-import java.util.List;
 import java.util.Random;
-import java.util.concurrent.CopyOnWriteArrayList;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket;
-import net.minecraft.network.protocol.game.ServerGamePacketListener;
 import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
 import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
@@ -103,7 +99,6 @@ public class Scaffold extends Module {
     private PlacementTarget currentPlacement;
     private int airTicks = 0;
     private int rotationDelay = 0;
-    private final CopyOnWriteArrayList<CopyOnWriteArrayList<Packet<?>>> packetBatches = new CopyOnWriteArrayList<>();
     private boolean canBuildNow;
     private BlockPos lastC05Position;
     private int tellyPlaceDelayTimer;
@@ -117,6 +112,9 @@ public class Scaffold extends Module {
     private int shelfInitialBlocks;
     private boolean shelfHudInitialized;
     private long hudLastFrameTime;
+    /** getBlockSlot 的拍内缓存: 方块计数每帧都要, 但背包内容一拍内不会变。 */
+    private int blockCountCache;
+    private int blockCountCacheTick = -1;
 
     public Scaffold() {
         super("Scaffold", Category.MOVEMENT);
@@ -139,8 +137,6 @@ public class Scaffold extends Module {
             this.velocityDelay = 0;
             this.canBuildNow = true;
             this.lastC05Position = null;
-            this.packetBatches.clear();
-            this.packetBatches.add(new CopyOnWriteArrayList<>());
             this.rotSmoother.reset();
         }
         this.shelfHudInitialized = mc.player != null;
@@ -153,8 +149,6 @@ public class Scaffold extends Module {
     @Override
     public void onDisable() {
         if (mc != null && mc.player != null) {
-            this.packetBatches.forEach(this::processBatchedPackets);
-            this.packetBatches.clear();
             boolean jumpDown = InputConstants.isKeyDown(mc.getWindow().getWindow(), mc.options.keyJump.getKey().getValue());
             boolean shiftDown = InputConstants.isKeyDown(mc.getWindow().getWindow(), mc.options.keyShift.getKey().getValue());
             mc.options.keyJump.setDown(jumpDown);
@@ -167,16 +161,10 @@ public class Scaffold extends Module {
             this.canBuildNow = true;
             this.lastC05Position = null;
             this.rotSmoother.reset();
+            this.blockCountCacheTick = -1;
             ClientBase.delayPackets.clear();
         }
         super.onDisable();
-    }
-
-    private void processBatchedPackets(List<Packet<?>> batch) {
-        batch.forEach(packet -> {
-            batch.remove(packet);
-            PacketUtil.sendQueued((Packet<ServerGamePacketListener>) packet);
-        });
     }
 
     @EventTarget
@@ -252,7 +240,6 @@ public class Scaffold extends Module {
         }
         this.slotTicks++;
 
-        this.packetBatches.add(new CopyOnWriteArrayList<>());
         if (this.velocityDelay > 0) this.velocityDelay--;
         if (mc.player.onGround() && this.velocityDelay <= 30) this.velocityDelay = 0;
 
@@ -383,8 +370,14 @@ public class Scaffold extends Module {
 
     @EventTarget
     public void onPreMotion(PreMotionEvent event) {
-        event.setCancelled(true);
         if (mc.screen != null || mc.player == null || this.currentPlacement == null) return;
+        // 只有确实有放置目标时才接管原生 use 流程。
+        //
+        // 原来是在守卫**之前**无条件 setCancelled(true): 而 EventBus 一旦看到 cancelled 就停止
+        // 分发, MinecraftPatch 也会据此截断 handleKeybinds。结果是没有放置目标、甚至开着背包时
+        // 也照样截断 —— 搭路模块开着就吃不了东西、交互不了容器, 排在 Scaffold 之后的 PreMotion
+        // 监听器也全被跳过。挪到守卫之后即可, 有目标时的行为完全不变。
+        event.setCancelled(true);
 
         if (this.onTickRot.getValue() || (!this.canBuildNow && this.rotationDelay > 0)) {
             if (this.mode.is("Telly Bridge") && this.airTicks < this.tellyAirTicks.getValue().intValue()) return;
@@ -631,8 +624,20 @@ public class Scaffold extends Module {
         });
     }
 
+    /**
+     * 背包里可放置方块的总数。
+     *
+     * <p>HUD 每帧要读这个值, 而它是 36 格 + 副手逐个 {@link BlockUtil#isPlaceable}。那个方法内部
+     * 会调 {@code itemStack.getDisplayName().getString()} —— 每次都新建一个 Component 再把
+     * 译文解析成字符串, 144fps 下就是每秒 5000 多次组件构建, 全是纯垃圾。背包内容一拍之内不会变,
+     * 按 tickCount 缓存即可, 顺带把 HUD 的这部分开销从"每帧"降到"每拍"。
+     */
     private int getBlockSlot() {
         if (mc.player == null) return 0;
+        int tick = mc.player.tickCount;
+        if (tick == this.blockCountCacheTick) {
+            return this.blockCountCache;
+        }
         int total = 0;
         for (int i = 0; i < 36; i++) {
             ItemStack stack = mc.player.getInventory().getItem(i);
@@ -644,6 +649,8 @@ public class Scaffold extends Module {
         if (offhand.getItem() instanceof BlockItem && BlockUtil.isPlaceable(offhand)) {
             total += offhand.getCount();
         }
+        this.blockCountCacheTick = tick;
+        this.blockCountCache = total;
         return total;
     }
 
@@ -748,21 +755,44 @@ public class Scaffold extends Module {
         return null;
     }
 
+    /**
+     * 全角度兜底搜索。
+     *
+     * <p>原实现是 {@code 180 yaw × 25 pitch × 2 方向 × 2 候选} ≈ 18000 次
+     * {@link RayTraceUtil#canRayTrace}, 每一次都是真实 raycast。这个分支平时走不到, 可一旦走到
+     * 就是单拍上万次方块/实体求交 —— 客户端 tick 预算只有 50ms, 直接卡成幻灯片, 而它还发生在
+     * 你正在搭路的时候。
+     *
+     * <p>改成两段: 先用 10°/5° 粗扫把整个角度空间过一遍 (约 450 次), 命中后在命中点附近 1° 细化
+     * (约 260 次)。最坏约 700 次, 是原来的 1/25, 覆盖面反而比原来更完整 —— 原来 pitch 只从当前
+     * 值向两侧各 25°, 粗扫是相对基准朝两侧各 25° 全扫。
+     */
     private Rotation findOptimalRotation(float baseYaw) {
         if (this.currentPlacement == null) return null;
 
-        for (float yawOffset = 0.0f; yawOffset < 180.0f; yawOffset++) {
-            float currentPitch = this.rots.getPitch();
-            for (float pitchOffset = 0.0f; pitchOffset < 25.0f; pitchOffset++) {
-                for (int i = 0; i < 2; i++) {
-                    float testPitch = currentPitch - pitchOffset * (i == 0 ? 1 : -1);
-                    testPitch = Mth.clamp(testPitch, -90.0f, 90.0f);
+        Rotation coarse = this.scanRotations(baseYaw, this.rots.getPitch(), 180.0f, 10.0f, 25.0f, 5.0f);
+        if (coarse == null) return null;
+        Rotation refined = this.scanRotations(coarse.getYaw(), coarse.getPitch(), 10.0f, 1.0f, 5.0f, 1.0f);
+        return refined != null ? refined : coarse;
+    }
 
-                    Rotation test1 = new Rotation(baseYaw + yawOffset, testPitch);
-                    if (isRotationValidForPlacement(test1)) return test1;
-
-                    Rotation test2 = new Rotation(baseYaw - yawOffset, testPitch);
-                    if (isRotationValidForPlacement(test2)) return test2;
+    /** 以 (centerYaw, centerPitch) 为中心, 在 ±yawSpan / ±pitchSpan 内按步长找第一个能命中的朝向。 */
+    private Rotation scanRotations(float centerYaw, float centerPitch,
+                                   float yawSpan, float yawStep,
+                                   float pitchSpan, float pitchStep) {
+        for (float yawOffset = 0.0f; yawOffset <= yawSpan; yawOffset += yawStep) {
+            for (float pitchOffset = 0.0f; pitchOffset <= pitchSpan; pitchOffset += pitchStep) {
+                for (int yawSign = 1; yawSign >= -1; yawSign -= 2) {
+                    if (yawOffset == 0.0f && yawSign < 0) continue;
+                    for (int pitchSign = 1; pitchSign >= -1; pitchSign -= 2) {
+                        if (pitchOffset == 0.0f && pitchSign < 0) continue;
+                        Rotation test = new Rotation(
+                                centerYaw + yawSign * yawOffset,
+                                Mth.clamp(centerPitch + pitchSign * pitchOffset, -90.0f, 90.0f));
+                        if (this.isRotationValidForPlacement(test)) {
+                            return test;
+                        }
+                    }
                 }
             }
         }
