@@ -15,6 +15,7 @@ import client.nilore.modules.Module;
 import client.nilore.modules.impl.combat.AntiBots;
 import client.nilore.modules.impl.combat.AntiFireball;
 import client.nilore.modules.impl.combat.AntiKB;
+import client.nilore.modules.impl.combat.AutoGapple;
 import client.nilore.modules.impl.combat.AutoOffHand;
 import client.nilore.modules.impl.combat.AutoSoup;
 import client.nilore.modules.impl.combat.AutoThrow;
@@ -82,6 +83,7 @@ public class ModuleManager extends ClientBase {
         this.register(new AntiBots());
         this.register(new AntiFireball());
         this.register(new AntiKB());
+        this.register(new AutoGapple());
         this.register(new AutoOffHand());
         this.register(new AutoSoup());
         this.register(new AutoThrow());
