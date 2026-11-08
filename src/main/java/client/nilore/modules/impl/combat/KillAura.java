@@ -698,14 +698,14 @@ public class KillAura extends Module {
         try (InputStream inputStream = Assets.open(NURIK_CAPTURE_ASSET)) {
             if (inputStream == null) {
                 nurikTextureLoadFailed = true;
-                System.out.println("KillAura: NurikZapen texture not found - " + NURIK_CAPTURE_ASSET);
+                logger.warn("KillAura: NurikZapen texture not found - {}", NURIK_CAPTURE_ASSET);
                 return;
             }
             mc.getTextureManager().register(NURIK_CAPTURE_TEXTURE, new DynamicTexture(NativeImage.read(inputStream)));
             nurikTextureLoaded = true;
         } catch (IOException exception) {
             nurikTextureLoadFailed = true;
-            System.out.println("KillAura: failed to load NurikZapen texture - " + exception.getMessage());
+            logger.warn("KillAura: failed to load NurikZapen texture - {}", exception.getMessage());
         }
     }
 

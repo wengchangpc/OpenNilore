@@ -210,20 +210,35 @@ public class NiloreClient extends ClientBase {
         PatchRegistry.register(BlockOcclusionCachePatch.class);
     }
 
+    /**
+     * Cached result of the reflective {@code Minecraft.instance} lookup. The field
+     * walk only has to happen once per JVM: the singleton never changes, and the
+     * patches call this from {@code Minecraft.tick()} on every client start.
+     */
+    private static volatile Minecraft mcInstance;
+
     public static Minecraft getMcInstance() {
+        Minecraft cached = mcInstance;
+        if (cached != null) {
+            return cached;
+        }
         Minecraft minecraft = null;
         try {
             Class<?> clazz = Minecraft.class;
             for (Field field : clazz.getDeclaredFields()) {
-                if (field.getType() != clazz) continue;
-                field.setAccessible(true);
+                if (field.getType() != clazz || !field.trySetAccessible()) continue;
                 minecraft = (Minecraft) field.get(null);
-                field.setAccessible(false);
             }
         } catch (Throwable throwable) {
-            throwable.printStackTrace();
+            logger.error("Reflective Minecraft instance lookup failed, falling back to Minecraft.getInstance()", throwable);
         }
-        return minecraft != null ? minecraft : Minecraft.getInstance();
+        if (minecraft == null) {
+            minecraft = Minecraft.getInstance();
+        }
+        if (minecraft != null) {
+            mcInstance = minecraft;
+        }
+        return minecraft;
     }
 
 }

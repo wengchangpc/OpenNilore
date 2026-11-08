@@ -43,6 +43,10 @@ public class ModuleListHud extends HudElement {
         private float textWidth;
         private float rowWidth;
         private boolean targetVisible;
+        /** Font renderer the cached metrics were measured with; {@code null} = MC font. */
+        private FontRenderer measuredFont;
+        private boolean measured;
+        private boolean measuredWithMcFont;
 
         private AnimatedRow(Module module) {
             this.module = module;
@@ -51,10 +55,27 @@ public class ModuleListHud extends HudElement {
             this.progressAnim.setToValue(0.0f);
         }
 
-        private void updateMetrics(String displayName, float textWidth, float rowWidth) {
+        private void updateMetrics(String displayName, float textWidth, float rowWidth,
+                                   FontRenderer font, boolean withMcFont) {
             this.name = displayName;
             this.textWidth = textWidth;
             this.rowWidth = rowWidth;
+            this.measuredFont = font;
+            this.measuredWithMcFont = withMcFont;
+            this.measured = true;
+        }
+
+        /**
+         * Cheap change detection so the (comparatively expensive) glyph walk in
+         * {@code mc.font.width}/{@code GlHelper.getStringWidth} only runs when the
+         * rendered text or the active font actually changed. This method runs for
+         * every enabled module on every frame, so it must stay allocation-free.
+         */
+        private boolean isMeasureStale(String displayName, FontRenderer font, boolean withMcFont) {
+            return !this.measured
+                    || this.measuredWithMcFont != withMcFont
+                    || this.measuredFont != font
+                    || !this.name.equals(displayName);
         }
 
         private void setTargetVisible(boolean visible) {
@@ -182,6 +203,10 @@ public class ModuleListHud extends HudElement {
     private final SmoothAnimationTimer widthAnim = new SmoothAnimationTimer();
     private final SmoothAnimationTimer heightAnim = new SmoothAnimationTimer();
     private final Map<Module, AnimatedRow> rowStates = new IdentityHashMap<>();
+    /** Reused between frames: {@code updateRows()} runs on every render pass. */
+    private final List<AnimatedRow> rowBuffer = new ArrayList<>();
+    private static final java.util.Comparator<AnimatedRow> WIDTH_DESCENDING =
+            (a, b) -> Float.compare(b.textWidth, a.textWidth);
     private boolean animationReady;
 
     public ModuleListHud() {
@@ -272,10 +297,12 @@ public class ModuleListHud extends HudElement {
                     this.rowStates.put(module, row);
                 }
                 String displayName = this.displayName(module);
-                float textWidth = useMcFont
-                        ? mc.font.width(displayName)
-                        : GlHelper.getStringWidth(displayName, font);
-                row.updateMetrics(displayName, textWidth, this.rowWidth(textWidth));
+                if (row.isMeasureStale(displayName, font, useMcFont)) {
+                    float textWidth = useMcFont
+                            ? mc.font.width(displayName)
+                            : GlHelper.getStringWidth(displayName, font);
+                    row.updateMetrics(displayName, textWidth, this.rowWidth(textWidth), font, useMcFont);
+                }
                 row.setTargetVisible(true);
             } else if (row != null) {
                 row.setTargetVisible(false);
@@ -284,9 +311,10 @@ public class ModuleListHud extends HudElement {
         this.rowStates.values().forEach(AnimatedRow::tick);
         this.rowStates.values().removeIf(AnimatedRow::isFinishedRemoving);
 
-        List<AnimatedRow> rows = new ArrayList<>(this.rowStates.values());
-        rows.sort((a, b) -> Float.compare(b.textWidth, a.textWidth));
-        return rows;
+        this.rowBuffer.clear();
+        this.rowBuffer.addAll(this.rowStates.values());
+        this.rowBuffer.sort(WIDTH_DESCENDING);
+        return this.rowBuffer;
     }
 
     private boolean usesMinecraftFont() {
