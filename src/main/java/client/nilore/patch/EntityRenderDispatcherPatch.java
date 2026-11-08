@@ -14,6 +14,7 @@ import net.minecraft.world.entity.ExperienceOrb;
 import net.minecraft.world.entity.projectile.AbstractArrow;
 import net.minecraft.world.entity.projectile.ThrownTrident;
 import client.nilore.NiloreClient;
+import client.nilore.modules.impl.render.BetterFPS;
 import client.nilore.modules.impl.render.EntityDuang;
 import client.nilore.modules.impl.render.EntityEditor;
 import client.nilore.modules.impl.render.FakeAntiAim;
@@ -44,6 +45,14 @@ public class EntityRenderDispatcherPatch {
 
         Minecraft mc = Minecraft.getInstance();
         if (!NiloreClient.isReady()) return;
+
+        // 性能剔除放在最前面: 越早返回, 省掉的矩阵运算和 draw call 越多。
+        // x/y/z 这里是"实体插值位置 - 相机位置", 正好是判定距离要用的量。
+        BetterFPS betterFPS = BetterFPS.INSTANCE;
+        if (betterFPS != null && betterFPS.shouldCullEntity(entity, x, y, z)) {
+            ci.cancel();
+            return;
+        }
 
         boolean shouldProcessEditor = EntityEditor.INSTANCE != null && EntityEditor.INSTANCE.isEnabled();
 

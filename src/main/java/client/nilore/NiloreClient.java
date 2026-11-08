@@ -46,6 +46,7 @@ import client.nilore.patch.LocalPlayerPatch;
 import client.nilore.patch.MinecraftPatch;
 import client.nilore.patch.MouseHandlerPatch;
 import client.nilore.patch.PacketUtilsPatch;
+import client.nilore.patch.ParticleEnginePatch;
 import client.nilore.patch.PlayerPatch;
 import client.nilore.patch.PlayerTabOverlayPatch;
 import client.nilore.asm.Bootstrap;
@@ -201,6 +202,7 @@ public class NiloreClient extends ClientBase {
         PatchRegistry.register(PlayerTabOverlayPatch.class);
         PatchRegistry.register(FriendlyByteBufPatch.class);
         PatchRegistry.register(GuiPatch.class);
+        PatchRegistry.register(ParticleEnginePatch.class);
 
         // Compatibility patch for Embeddium/Sodium's BlockOcclusionCache.
         // Always registered so the transformer can catch the class when it
