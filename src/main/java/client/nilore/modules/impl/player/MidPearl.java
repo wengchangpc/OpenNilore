@@ -22,6 +22,7 @@ import client.nilore.settings.impl.BooleanSetting;
 import client.nilore.settings.impl.ModeSetting;
 import client.nilore.utils.animation.Timer;
 import client.nilore.utils.game.ItemUtil;
+import client.nilore.utils.game.PlayerUtil;
 import client.nilore.utils.game.RotationUtil;
 import client.nilore.utils.misc.PacketUtil;
 import client.nilore.utils.rotation.Rotation;
@@ -58,6 +59,9 @@ public class MidPearl extends Module {
     private int preThrowTicks = 0;
     private int rodSavedSlot = -1;
     private int postThrowTicks = 0;
+    /** calculateTargetRotation 的拍内缓存键/值。 */
+    private int aimCacheTick = -1;
+    private Rotation aimCache;
 
     public MidPearl() {
         super("MidPearl", Category.PLAYER);
@@ -71,15 +75,44 @@ public class MidPearl extends Module {
 
     @Override
     public void onDisable() {
+        boolean slotTouched = false;
         if (this.pearlSavedSlot != -1 && mc.player != null) {
             mc.player.getInventory().selected = this.pearlSavedSlot;
+            slotTouched = true;
         }
         if (this.rodSavedSlot != -1 && mc.player != null) {
             mc.player.getInventory().selected = this.rodSavedSlot;
+            slotTouched = true;
+        }
+        if (slotTouched) {
+            this.syncCarriedSlot();
         }
         // 中途关模块不能把光环留在停摆里。
         KillAura.clearPause();
         this.reset();
+    }
+
+    /**
+     * 把 {@code inventory.selected} 的改动真正发给服务端。
+     *
+     * <p>原实现只改本地字段, 然后直接 {@code PacketUtil.sendPredictive} 发裸 USE_ITEM。
+     * 原生客户端发 SET_CARRIED_ITEM 的唯一入口是 {@code MultiPlayerGameMode.ensureHasSentCarriedItem()},
+     * 而它挂在 {@code gameMode.useItem()/attack()} 里 —— 裸包把这条路整个跳过了。
+     *
+     * <p>后果有两层: 服务端还以为你拿着上一件东西, 这一发 USE_ITEM 要么被当成"手持不符"丢掉
+     * (珍珠根本不飞), 要么按旧物品解释; 对 Grim 这类服务端就是一条物品/槽位不同步的 bad packet。
+     * 旧代码关掉 KillAura 之后反而更糟 —— 光环的 {@code gameMode.attack()} 是唯一会顺手补发
+     * 槽位包的地方, 关了之后就彻底没人发了。
+     *
+     * <p>仓库里另外五个切槽位的模块 (AutoSoup / AutoThrow / AutoRod / AntiWeb / AutoWebPlace)
+     * 都老老实实调了这个方法, 只有 MidPearl 漏了。{@code ensureHasSentCarriedItem} 内部会比对
+     * carriedIndex, 相同槽位不会重复发包, 所以多点调用是安全且幂等的。
+     */
+    private void syncCarriedSlot() {
+        if (mc.player == null || mc.gameMode == null) {
+            return;
+        }
+        PlayerUtil.sendCarriedItem();
     }
 
     /**
@@ -108,6 +141,8 @@ public class MidPearl extends Module {
         this.isHoldingButton = false;
         this.rodSavedSlot = -1;
         this.postThrowTicks = 0;
+        this.aimCacheTick = -1;
+        this.aimCache = null;
     }
 
     private void cancelThrow() {
@@ -148,6 +183,7 @@ public class MidPearl extends Module {
             --this.postThrowTicks;
             if (this.postThrowTicks == 0 && this.rodSavedSlot != -1) {
                 mc.player.getInventory().selected = this.rodSavedSlot;
+                this.syncCarriedSlot();
                 this.rodSavedSlot = -1;
             }
         }
@@ -156,6 +192,7 @@ public class MidPearl extends Module {
             if (this.disableDelay == 0) {
                 if (this.pearlSavedSlot != -1) {
                     mc.player.getInventory().selected = this.pearlSavedSlot;
+                    this.syncCarriedSlot();
                 }
                 this.reset();
             }
@@ -211,7 +248,24 @@ public class MidPearl extends Module {
         return this.calculateTargetRotation().isPresent();
     }
 
+    /**
+     * 同一拍内只算一次。
+     *
+     * <p>原实现每拍会被算 2~3 遍：{@code isAutoRodActive()} → AutoRod → {@code isInterceptButton()}
+     * → {@code hasTargetRotation()} 一遍，随后 onTick 里的 {@code updateTargetRotation()} 又一遍。
+     * 每次都要遍历 projectileMap、在实体表里 getEntity、做一次 clip 射线和弹道角度解算，
+     * 而这些输入在同一个 tick 内不会变。用 tickCount 做键，跨 tick 才重算。
+     */
     private Optional<Rotation> calculateTargetRotation() {
+        int tick = mc.player != null ? mc.player.tickCount : -1;
+        if (tick != this.aimCacheTick) {
+            this.aimCacheTick = tick;
+            this.aimCache = this.computeTargetRotation();
+        }
+        return Optional.ofNullable(this.aimCache);
+    }
+
+    private Rotation computeTargetRotation() {
         Optional<Projectiles.ProjectileEntry> projectile = this.findNearestEnemyPearl();
         if (projectile.isPresent()) {
             int slot = ItemUtil.getSlot(Items.ENDER_PEARL);
@@ -222,15 +276,15 @@ public class MidPearl extends Module {
                                 mc.player.getEyePosition(), velocity,
                                 ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE,
                                 mc.player)).getType() != HitResult.Type.MISS) {
-                    return Optional.empty();
+                    return null;
                 }
                 float[] angles = RotationUtil.getBallisticAngles(velocity);
                 if (angles != null) {
-                    return Optional.of(new Rotation(angles[0], angles[1]));
+                    return new Rotation(angles[0], angles[1]);
                 }
             }
         }
-        return Optional.empty();
+        return null;
     }
 
     private void selectPearlSlot(int slot) {
@@ -240,6 +294,8 @@ public class MidPearl extends Module {
         this.preThrowTicks = 2;
         this.rodSavedSlot = mc.player.getInventory().selected;
         mc.player.getInventory().selected = slot;
+        // 槽位包必须跟着出去: 后面 throwPearl 发的是裸 USE_ITEM, 不走 gameMode.useItem()。
+        this.syncCarriedSlot();
     }
 
     private void throwPearl() {
@@ -279,6 +335,8 @@ public class MidPearl extends Module {
                     this.pearlSavedSlot = mc.player.getInventory().selected;
                     // 原来这里 KillAura.INSTANCE.setEnabled(false) —— 松手前光环照常打。
                     mc.player.getInventory().selected = slot;
+                    // 提前一拍把槽位包发出去, 服务端才能在 USE_ITEM 到达时知道你手里是珍珠。
+                    this.syncCarriedSlot();
                 }
             }
         } else if (this.pearlSlotSelected) {

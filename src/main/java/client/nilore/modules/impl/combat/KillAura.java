@@ -15,8 +15,6 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.stream.Collectors;
-import java.util.stream.StreamSupport;
 import net.minecraft.client.Camera;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.texture.DynamicTexture;
@@ -330,9 +328,17 @@ public class KillAura extends Module {
     }
 
     /**
-     * Naven getRotationDataToEntity: stable aim-point pick (LinkedHashSet dedup: center first,
-     * then closest point, then a 0.1 grid over the six faces). The first point whose rotation
-     * ray hits the target wins, so the aim point does not hop around between ticks.
+     * Naven getRotationDataToEntity: stable aim-point pick (center first, then the closest point,
+     * then a 0.1 grid over the six faces). The first point whose rotation ray hits the target
+     * wins, so the aim point does not hop around between ticks.
+     *
+     * <p>原版先把整张网格灌进一个 LinkedHashSet 再逐个射线：玩家 AABB (0.6 x 1.8 x 0.6) 在 0.1
+     * 间距下是 530 个点，也就是每拍凭空造 530 个 Vec3 + 同量级哈希节点，再逐点做射线。而实际上
+     * 第一个命中就 return，绝大多数对局里"中心点"或"最近点"就已经打中了，那 530 个点全是白造。
+     * 改成边遍历边判、命中即返回，常规路径零分配；网格兜底段也只在前面两步全落空时才走。
+     *
+     * <p>去重语义的差异：原版靠 Set 跳过重复点（面与面共享的棱/角点），这里会重复判一次。
+     * 同一个点判定结果必然相同，只是多一次射线，且只在兜底段才可能发生，换取的是常态零分配。
      */
     private Rotation aimRotationTo(Entity target) {
         if (mc.player == null) {
@@ -340,36 +346,52 @@ public class KillAura extends Module {
         }
         Vec3 eye = mc.player.getEyePosition();
         AABB box = target.getBoundingBox();
-        java.util.LinkedHashSet<Vec3> points = new java.util.LinkedHashSet<>();
-        points.add(new Vec3((box.minX + box.maxX) / 2.0, (box.minY + box.maxY) / 2.0, (box.minZ + box.maxZ) / 2.0));
-        points.add(RotationUtil.closestPoint(eye, box));
+
+        Rotation hit = this.tryAimPoint(target, eye,
+                (box.minX + box.maxX) / 2.0, (box.minY + box.maxY) / 2.0, (box.minZ + box.maxZ) / 2.0);
+        if (hit != null) {
+            return hit;
+        }
+        Vec3 closest = RotationUtil.closestPoint(eye, box);
+        hit = this.tryAimPoint(target, eye, closest.x, closest.y, closest.z);
+        if (hit != null) {
+            return hit;
+        }
 
         double spacing = 0.1;
         for (double x = box.minX; x <= box.maxX; x += spacing) {
             for (double y = box.minY; y <= box.maxY; y += spacing) {
-                points.add(new Vec3(x, y, box.minZ));
-                points.add(new Vec3(x, y, box.maxZ));
+                hit = this.tryAimPoint(target, eye, x, y, box.minZ);
+                if (hit != null) return hit;
+                hit = this.tryAimPoint(target, eye, x, y, box.maxZ);
+                if (hit != null) return hit;
             }
         }
         for (double x = box.minX; x <= box.maxX; x += spacing) {
             for (double z = box.minZ; z <= box.maxZ; z += spacing) {
-                points.add(new Vec3(x, box.minY, z));
-                points.add(new Vec3(x, box.maxY, z));
+                hit = this.tryAimPoint(target, eye, x, box.minY, z);
+                if (hit != null) return hit;
+                hit = this.tryAimPoint(target, eye, x, box.maxY, z);
+                if (hit != null) return hit;
             }
         }
         for (double y = box.minY; y <= box.maxY; y += spacing) {
             for (double z = box.minZ; z <= box.maxZ; z += spacing) {
-                points.add(new Vec3(box.minX, y, z));
-                points.add(new Vec3(box.maxX, y, z));
+                hit = this.tryAimPoint(target, eye, box.minX, y, z);
+                if (hit != null) return hit;
+                hit = this.tryAimPoint(target, eye, box.maxX, y, z);
+                if (hit != null) return hit;
             }
         }
+        return null;
+    }
 
-        for (Vec3 point : points) {
-            Rotation brute = RotationUtil.rotationToPoint(eye, point);
-            HitResult hit = RotationUtil.rayTraceForAim(brute, MAX_REACH);
-            if (hit instanceof EntityHitResult entityHit && entityHit.getEntity() == target) {
-                return this.fixRotation(brute);
-            }
+    /** 单个候选点的判定：算旋转 → 射线 → 命中的确实是该目标才返回。 */
+    private Rotation tryAimPoint(Entity target, Vec3 eye, double x, double y, double z) {
+        Rotation brute = RotationUtil.rotationToPoint(eye, new Vec3(x, y, z));
+        HitResult hit = RotationUtil.rayTraceForAim(brute, MAX_REACH);
+        if (hit instanceof EntityHitResult entityHit && entityHit.getEntity() == target) {
+            return this.fixRotation(brute);
         }
         return null;
     }
@@ -387,7 +409,8 @@ public class KillAura extends Module {
         float gcd = f * f * f * 1.2f;
         float deltaYaw = Mth.wrapDegrees(raw.getYaw() - last.getYaw());
         float deltaPitch = raw.getPitch() - last.getPitch();
-        double maxStep = this.rotationSpeed.getValue().doubleValue();
+        // 停摆刚结束时压一下步长, 别把攒了三拍的朝向差在一拍里甩完 (见 RESUME_RAMP)。
+        double maxStep = this.rotationSpeed.getValue().doubleValue() * resumeRampFactor();
         double dist = Math.sqrt(deltaYaw * deltaYaw + deltaPitch * deltaPitch);
         if (maxStep > 0.0 && dist > maxStep) {
             float k = (float) (maxStep / dist);
@@ -501,14 +524,20 @@ public class KillAura extends Module {
         return RotationUtil.isEntityInFov(entity, this.fov.getValue().doubleValue());
     }
 
-    /** Naven getTargets: 并发扫描 + 过滤 + 优先级排序 + Baby 偏好 + 末影水晶优先 + 切换上限。 */
+    /** Naven getTargets: 扫描 + 过滤 + 优先级排序 + Baby 偏好 + 末影水晶优先 + 切换上限。 */
     private List<Entity> getTargets() {
         if (mc.player == null || mc.level == null) {
             return new ArrayList<>();
         }
-        List<Entity> possibleTargets = StreamSupport.stream(mc.level.entitiesForRendering().spliterator(), true)
-                .filter(this::isValidAttack)
-                .collect(Collectors.toList());
+        // 原来用并行流。实体数通常几十个，拆分/合并 ForkJoin 任务的固定开销远大于过滤本身，
+        // 而且会去抢公共池，和渲染线程互相踩。isValidAttack 里已经有比较重的判定（距离、FoV、
+        // hurtTime），串行一次扫完反而更快，也不会为每个元素生成 lambda 捕获。
+        List<Entity> possibleTargets = new ArrayList<>();
+        for (Entity entity : mc.level.entitiesForRendering()) {
+            if (this.isValidAttack(entity)) {
+                possibleTargets.add(entity);
+            }
+        }
 
         if (possibleTargets.isEmpty()) {
             return possibleTargets;
@@ -562,6 +591,17 @@ public class KillAura extends Module {
     private static long pauseUntilTick = Long.MIN_VALUE;
 
     /**
+     * 停摆结束后前 3 拍允许补回的朝向差比例。
+     *
+     * <p>停摆期间 {@code isRotating} 为 false, 服务端收到的就是玩家真实准心朝向; 恢复第一拍要
+     * 把朝向拉回目标, 差值可能已经攒到上百列。{@code rotationSpeed} 默认上限就是 180/tick,
+     * 也就是说这一拍会原样甩过去 —— 在服务端眼里, 前 3 拍朝向几乎不动、然后单拍 150°+ 到位,
+     * 这是 Grim 一类 aim 检查最容易抓的形状 (起步加速度无穷大 + 单拍大角位移)。
+     * 按 0.35 → 0.65 → 1.0 放行, 看起来就是人手动把准心甩回去, 三拍后完全恢复。
+     */
+    private static final double[] RESUME_RAMP = {0.35, 0.65, 1.0};
+
+    /**
      * 让光环停摆 {@code ticks} 拍。
      *
      * <p>MidPearl 原本在选中珍珠槽时直接 {@code setEnabled(false)}: 目标状态、APS 蓄力、
@@ -593,6 +633,18 @@ public class KillAura extends Module {
             return mc.level.getGameTime();
         }
         return mc.player != null ? mc.player.tickCount : 0L;
+    }
+
+    /** 停摆结束后的朝向差放行比例; 没停摆过、仍在停摆、或已过 3 拍都是 1.0。 */
+    private static double resumeRampFactor() {
+        if (pauseUntilTick == Long.MIN_VALUE) {
+            return 1.0;
+        }
+        long since = currentTick() - pauseUntilTick;
+        if (since < 0 || since >= RESUME_RAMP.length) {
+            return 1.0;
+        }
+        return RESUME_RAMP[(int) since];
     }
 
     public static boolean shouldKeepSprintInDelayWindow() {
