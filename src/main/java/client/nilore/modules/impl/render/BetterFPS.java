@@ -10,6 +10,7 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
@@ -71,6 +72,11 @@ public class BetterFPS extends Module {
 
     private final BooleanSetting keepPlayers = new BooleanSetting("Keep Players", true,
             () -> (Boolean) this.entityCull.getValue());
+
+    private final BooleanSetting blockEntityCull = new BooleanSetting("Block Entity Cull", true);
+
+    private final NumberSetting blockEntityDistance = new NumberSetting("Block Entity Distance", 48, 8, 160, 8,
+            () -> (Boolean) this.blockEntityCull.getValue());
 
     private final BooleanSetting nameTagCull = new BooleanSetting("Name Tag Cull", true);
 
@@ -273,6 +279,38 @@ public class BetterFPS extends Module {
         BlockHitResult hit = mc.level.clip(
                 new ClipContext(eye, nearest, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, entity));
         return hit.getType() == HitResult.Type.BLOCK;
+    }
+
+    // ------------------------------------------------------------------
+    // 方块实体剔除
+    // ------------------------------------------------------------------
+
+    /**
+     * 箱子、告示牌、熔炉这类方块实体的渲染入口。
+     *
+     * <p>vanilla 只做视锥剔除, 没有任何距离上限 —— 视距开到 16 区块时,
+     * 两百多格外的告示牌照样在走完整的模型渲染, 村庄和仓库场景下这项很可观。</p>
+     *
+     * <p>这里只按距离剔除, 不做遮挡判定: 方块实体的渲染包围盒有很多是无限大
+     * ({@code getRenderBoundingBox} 返回 INFINITE), 拿它去做射线会直接失效。</p>
+     */
+    public boolean shouldCullBlockEntity(BlockEntity blockEntity) {
+        if (!this.isEnabled() || blockEntity == null) {
+            return false;
+        }
+        if (!(Boolean) this.blockEntityCull.getValue()) {
+            return false;
+        }
+        if (mc.level == null || mc.gameRenderer == null) {
+            return false;
+        }
+        double limit = this.blockEntityDistance.getValue().doubleValue();
+        Vec3 cam = mc.gameRenderer.getMainCamera().getPosition();
+        BlockPos pos = blockEntity.getBlockPos();
+        double dx = pos.getX() + 0.5 - cam.x;
+        double dy = pos.getY() + 0.5 - cam.y;
+        double dz = pos.getZ() + 0.5 - cam.z;
+        return dx * dx + dy * dy + dz * dz > limit * limit;
     }
 
     // ------------------------------------------------------------------
