@@ -150,6 +150,7 @@ public class ModuleManager extends ClientBase {
         this.register(new Projectiles());
         this.register(new TimeWeather());
         this.register(new Watermark());
+        this.register(new Wings());
         this.register(new XRay());
 
         this.register(new AntiStaff());
