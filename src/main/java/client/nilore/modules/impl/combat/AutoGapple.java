@@ -1,19 +1,23 @@
 package client.nilore.modules.impl.combat;
 
+import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
 import net.minecraft.network.protocol.game.ServerboundSetCarriedItemPacket;
 import net.minecraft.network.protocol.game.ServerboundUseItemPacket;
+import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import client.nilore.NiloreClient;
 import client.nilore.event.EventTarget;
+import client.nilore.event.impl.Render2DEvent;
 import client.nilore.event.impl.StrafeEvent;
 import client.nilore.event.impl.TickEvent;
 import client.nilore.event.impl.WorldChangeEvent;
+import client.nilore.hud.ModuleListHud;
 import client.nilore.modules.Category;
 import client.nilore.modules.Module;
 import client.nilore.modules.impl.player.Stuck;
@@ -89,6 +93,15 @@ public class AutoGapple extends Module {
     public final NumberSetting jitter = new NumberSetting("Jitter", 10, 0, 60, 1);
     public final NumberSetting packetGap = new NumberSetting("Packet Gap", 1, 0, 5, 1);
     public final NumberSetting restoreDelay = new NumberSetting("Restore Delay", 2, 1, 10, 1);
+
+    /**
+     * 进食进度条。
+     *
+     * <p>这个模块走的是纯包驱动, 客户端从不进入 use-item 状态, 所以原生那套"抬手吃"的动画
+     * 一个都不会出现 —— 玩家唯一的反馈只有血量回没回。这条进度条的进度源就是状态机自己的
+     * {@code stageTicks}, 分母取原版金苹果的 32 拍, 不额外发任何包, 也不影响服务端判定。
+     */
+    public final BooleanSetting progressBar = new BooleanSetting("Progress Bar", true);
 
     private Stage stage = Stage.IDLE;
     private int stageTicks;
@@ -171,6 +184,64 @@ public class AutoGapple extends Module {
         event.setForward(0.0f);
         event.setStrafe(0.0f);
         event.setJumping(false);
+    }
+
+    /**
+     * 准心下方偏上的进食进度条。
+     *
+     * <p>只读状态机, 零发包、零服务端交互 —— 纯客户端提示, 不存在任何可被服务端观测的新信号。
+     * 位置压在快捷栏上方 (guiScaledHeight - 58), 不遮挡血量/饥饿值。
+     */
+    @EventTarget
+    public void onRender2D(Render2DEvent event) {
+        if (!this.progressBar.getValue() || mc.player == null || mc.level == null) {
+            return;
+        }
+        if (this.stage != Stage.SELECT_SLOT && this.stage != Stage.START_USE
+                && this.stage != Stage.EATING && this.stage != Stage.FINISHED) {
+            return;
+        }
+        GuiGraphics graphics = event.guiGraphics();
+        if (graphics == null) {
+            return;
+        }
+
+        // FINISHED 阶段 stageTicks 已经归零, 直接钉在满进度, 免得条子回缩一下显得没吃完。
+        float progress = this.stage == Stage.FINISHED
+                ? 1.0f
+                : Mth.clamp(this.stageTicks / (float) USE_TICKS, 0.0f, 1.0f);
+
+        int screenWidth = mc.getWindow().getGuiScaledWidth();
+        int screenHeight = mc.getWindow().getGuiScaledHeight();
+        int barWidth = 82;
+        int barHeight = 4;
+        int x = screenWidth / 2 - barWidth / 2;
+        int y = screenHeight - 58;
+
+        int accent = this.barColor();
+        // 深色描边: 亮天空 / 亮方块背景下也能看清边界。
+        graphics.fill(x - 1, y - 1, x + barWidth + 1, y + barHeight + 1, 0x9A000000);
+        graphics.fill(x, y, x + barWidth, y + barHeight, 0x40FFFFFF);
+        int filled = x + Math.round(barWidth * progress);
+        if (filled > x) {
+            graphics.fill(x, y, filled, y + barHeight, accent);
+        }
+    }
+
+    /** 进度条主色: 跟随 HUD 主题色, 取不到就退回金苹果色。 */
+    private int barColor() {
+        try {
+            NiloreClient client = NiloreClient.getInstance();
+            if (client != null && client.getHudManager() != null) {
+                ModuleListHud hud = client.getHudManager().getHudElement(ModuleListHud.class);
+                if (hud != null) {
+                    return hud.getThemeColor(0, 0.0f, 3) | 0xFF000000;
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // HUD 还没初始化完 —— 退回兜底色, 不能因为画个条子把渲染管线搞崩。
+        }
+        return 0xFFFFC64A;
     }
 
     private boolean canStart() {

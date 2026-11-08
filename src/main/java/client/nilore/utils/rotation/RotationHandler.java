@@ -21,6 +21,7 @@ import client.nilore.event.impl.UseItemRayTraceEvent;
 import client.nilore.event.impl.WorldChangeEvent;
 import client.nilore.modules.impl.combat.AntiKB;
 import client.nilore.modules.impl.combat.AutoThrow;
+import client.nilore.modules.impl.combat.BowAimbot;
 import client.nilore.modules.impl.combat.CrystalAura;
 import client.nilore.modules.impl.combat.KillAura;
 import client.nilore.modules.impl.movement.FireballBlink;
@@ -95,6 +96,7 @@ public class RotationHandler
             AutoThrow autoThrow = AutoThrow.INSTANCE;
             AntiKB antiKB = AntiKB.INSTANCE;
             MidPearl midPearl = MidPearl.INSTANCE;
+            BowAimbot bowAimbot = BowAimbot.INSTANCE;
             isRotating = true;
             if (autoMLG != null && autoMLG.isEnabled() && autoMLG.targetRotation != null) {
                 RotationHandler.setTargetRotation(autoMLG.targetRotation);
@@ -105,6 +107,10 @@ public class RotationHandler
                 RotationHandler.setTargetRotation(FireballBlink.rotation);
             } else if (midPearl != null && midPearl.isEnabled() && MidPearl.targetRotation != null) {
                 RotationHandler.setTargetRotation(MidPearl.targetRotation);
+            } else if (bowAimbot != null && bowAimbot.isEnabled() && bowAimbot.targetRotation != null) {
+                // 拉弓期间弹道朝向压过光环: KillAura 的出刀闸门本身就要求 getUseItem() 为空,
+                // 所以两者不会同时真的动手, 但朝向必须由弓说了算, 否则箭会按光环目标飞。
+                RotationHandler.setTargetRotation(bowAimbot.targetRotation);
             } else if (antiTNT != null && antiTNT.isEnabled() && AntiTNT.targetRotation != null) {
                 RotationHandler.setTargetRotation(AntiTNT.targetRotation);
             } else if (helper != null && helper.isEnabled() && helper.hasTargetRotation() && Helper.targetRotation != null) {

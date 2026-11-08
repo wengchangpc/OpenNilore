@@ -20,6 +20,7 @@ import client.nilore.modules.impl.combat.AutoOffHand;
 import client.nilore.modules.impl.combat.AutoSoup;
 import client.nilore.modules.impl.combat.AutoThrow;
 import client.nilore.modules.impl.combat.Backtrack;
+import client.nilore.modules.impl.combat.BowAimbot;
 import client.nilore.modules.impl.combat.Critical;
 import client.nilore.modules.impl.combat.CrystalAura;
 import client.nilore.modules.impl.combat.KillAura;
@@ -88,6 +89,7 @@ public class ModuleManager extends ClientBase {
         this.register(new AutoSoup());
         this.register(new AutoThrow());
         this.register(new Backtrack());
+        this.register(new BowAimbot());
         this.register(new Critical());
         this.register(new CrystalAura());
         this.register(new KillAura());
@@ -139,6 +141,7 @@ public class ModuleManager extends ClientBase {
         this.register(new EntityEditor());
         this.register(new EntityDuang());
         this.register(new AudioVisualizer());
+        this.register(new Cape());
         this.register(new FakeAntiAim());
         this.register(new FullBright());
         this.register(new Interface());
