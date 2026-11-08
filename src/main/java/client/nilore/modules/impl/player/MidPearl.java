@@ -31,11 +31,22 @@ public class MidPearl extends Module {
     public static MidPearl INSTANCE;
     public static Rotation targetRotation;
 
+    /**
+     * 投掷窗口让 KillAura 停摆的拍数。为什么要 3 拍:
+     *
+     * <p>use 包本身不带朝向, 服务端用的是"上一拍收到的 rotation"。光环的静默转向是在
+     * {@code MotionEvent} POST 里发出去的, 所以松手这一拍 (T) 必须已经开始停摆, 才能保证
+     * 服务端在 T+1 处理 use 包时手上的朝向还是玩家的准心。T 拍的 movement 包 + T+1 拍
+     * 的出刀 + T+1 拍珍珠离手, 三拍刚好盖住。
+     */
+    private static final int AURA_PAUSE_TICKS = 3;
+
     private final ModeSetting mainButtonSetting = new ModeSetting("Button", "Middle", "Mouse 4", "Mouse 5").withDefault("Middle");
     private final BooleanSetting interceptSetting = new BooleanSetting("Intercept", false);
     private final ModeSetting interceptButtonSetting = new ModeSetting("Intercept Button", "Mouse 4", "Mouse 5").withDefault("Mouse 4");
     private final BooleanSetting holdModeSetting = new BooleanSetting("On Release", false);
     private final BooleanSetting losCheckSetting = new BooleanSetting("Block Check", true);
+    private final BooleanSetting pauseAuraSetting = new BooleanSetting("Pause Aura", true);
     private final Timer throwTimer = new Timer();
     private boolean isHoldingIntercept = false;
     private boolean isHoldingButton = false;
@@ -66,7 +77,23 @@ public class MidPearl extends Module {
         if (this.rodSavedSlot != -1 && mc.player != null) {
             mc.player.getInventory().selected = this.rodSavedSlot;
         }
+        // 中途关模块不能把光环留在停摆里。
+        KillAura.clearPause();
         this.reset();
+    }
+
+    /**
+     * 投掷瞬间让 KillAura 停摆, 而不是把它关掉。
+     *
+     * <p>旧实现在选中珍珠槽时 {@code KillAura.INSTANCE.setEnabled(false)}: 目标列表、APS 蓄力、
+     * 朝向全部清零, 扔完还得手动开回来, 中间被人贴脸就是白挨一刀; 手速慢一点甚至会出现
+     * "珍珠还没扔出去光环先没了"。现在只在投掷窗口吞掉出刀与朝向接管。
+     */
+    private void pauseAura(int ticks) {
+        if (!this.pauseAuraSetting.getValue()) {
+            return;
+        }
+        KillAura.pauseFor(ticks);
     }
 
     private void reset() {
@@ -216,6 +243,8 @@ public class MidPearl extends Module {
     }
 
     private void throwPearl() {
+        // 拦截模式下朝向由 targetRotation 驱动, 这里只是顺手把光环的出刀也吞掉, 避免同拍双击。
+        this.pauseAura(2);
         if (mc.player.getMainHandItem().getItem() == Items.ENDER_PEARL) {
             PacketUtil.sendPredictive(n -> new ServerboundUseItemPacket(InteractionHand.MAIN_HAND, n));
             mc.player.swing(InteractionHand.MAIN_HAND);
@@ -233,6 +262,8 @@ public class MidPearl extends Module {
                 if (mc.player.getMainHandItem().getItem() == Items.ENDER_PEARL) {
                     PacketUtil.sendPredictive(n -> new ServerboundUseItemPacket(InteractionHand.MAIN_HAND, n));
                     mc.player.swing(InteractionHand.MAIN_HAND);
+                    // 兜一层: 前面若被别的模块打断, 出包这一拍也要保证光环是停的。
+                    this.pauseAura(2);
                 }
                 this.disableDelay = 2;
             }
@@ -246,15 +277,15 @@ public class MidPearl extends Module {
                 if (slot != -1 && slot < 9) {
                     this.pearlSlotSelected = true;
                     this.pearlSavedSlot = mc.player.getInventory().selected;
-                    if (KillAura.INSTANCE != null && KillAura.INSTANCE.isEnabled()) {
-                        KillAura.INSTANCE.setEnabled(false);
-                    }
+                    // 原来这里 KillAura.INSTANCE.setEnabled(false) —— 松手前光环照常打。
                     mc.player.getInventory().selected = slot;
                 }
             }
         } else if (this.pearlSlotSelected) {
             this.pearlSlotSelected = false;
             this.throwCountdown = 1;
+            // 松手这一拍就开始停摆: use 包带的是上一拍服务端朝向, 早一拍停手珍珠才朝准心飞。
+            this.pauseAura(AURA_PAUSE_TICKS);
         }
     }
 
