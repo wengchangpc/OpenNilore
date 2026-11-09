@@ -21,7 +21,6 @@ import client.nilore.hud.ModuleListHud;
 import client.nilore.modules.Category;
 import client.nilore.modules.Module;
 import client.nilore.modules.impl.player.MidPearl;
-import client.nilore.modules.impl.player.Stuck;
 import client.nilore.modules.impl.movement.Scaffold;
 import client.nilore.settings.impl.BooleanSetting;
 import client.nilore.settings.impl.ModeSetting;
@@ -63,9 +62,14 @@ import client.nilore.utils.misc.PacketUtil;
  *       disable so nothing is left half swapped.</li>
  * </ul>
  *
- * <p>Do not run this together with {@code Stuck}: that module cancels outgoing
- * {@code ServerboundUseItemPacket}s in order to replay them later, which would swallow the
- * use packet this module relies on. {@link #canStart()} refuses to start in that case.
+ * <p>Compatible with {@code Stuck}. That module freezes the player by cancelling outgoing
+ * {@code ServerboundMovePlayerPacket}s (and intercepting use/action packets on the normal
+ * event channel), but every packet this module sends goes through
+ * {@code PacketUtil.sendQueued}/{@code sendPredictiveDirect}, whose {@code queuedPackets}
+ * bypass skips the outbound {@code PacketEvent} dispatch entirely — Stuck never sees them,
+ * so the slot swap, the use and the release all reach the server with zero added delay while
+ * the movement freeze holds. Stuck in turn now queues (instead of overwriting) whatever it
+ * does capture, and flushes the queue before its own release packet.
  */
 public class AutoGapple extends Module {
     public static AutoGapple INSTANCE;
@@ -112,7 +116,6 @@ public class AutoGapple extends Module {
     private int originalSlot = -1;
     private int countBefore;
     private boolean swappedHand;
-    private boolean warnedAboutStuck;
     /** Scaffold 与进食互斥, 提示只打一次, 免得每拍刷日志。 */
     private boolean warnedAboutScaffold;
 
@@ -253,15 +256,6 @@ public class AutoGapple extends Module {
         if (mc.player.isUsingItem()) return false;
         if (mc.screen != null) return false;
         if (mc.player.isSpectator() || !mc.player.isAlive()) return false;
-
-        Stuck stuck = Stuck.INSTANCE;
-        if (stuck != null && stuck.isEnabled()) {
-            if (!this.warnedAboutStuck) {
-                this.warnedAboutStuck = true;
-                logger.warn("AutoGapple: Stuck is enabled — it swallows the outgoing use packet, so eating is paused.");
-            }
-            return false;
-        }
 
         // 主手所有权。这个模块独占主手的服务端槽位长达 40 拍 (Hotbar 模式更是靠主手进食),
         // 只在没人占用时启动:

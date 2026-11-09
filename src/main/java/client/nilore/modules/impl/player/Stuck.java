@@ -35,7 +35,14 @@ extends Module {
     public static Stuck INSTANCE;
     private final ModeSetting modeSetting = new ModeSetting("Mode", "Delay", "Packet").withDefault("Delay");
     private int stuckState = 0;
-    private Packet<?> capturedPacket;
+    /**
+     * 捕获的 use/action 包队列。
+     *
+     * <p>原来是单槽 {@code capturedPacket} —— 连续两个包(比如模块的 换手→使用 序列)
+     * 后一个覆盖前一个, 只有最后一个会被重放, 前面的凭空消失。改成 FIFO 队列后,
+     * 同一拍或跨拍到达的序列按序整体投递, 单包场景的行为与原来完全一致。</p>
+     */
+    private final Queue<Packet<ServerGamePacketListener>> capturedPackets = new ConcurrentLinkedQueue<>();
     private float savedYaw;
     private float savedPitch;
     private boolean pendingDisable = false;
@@ -49,7 +56,7 @@ extends Module {
     @Override
     public void onEnable() {
         this.stuckState = 0;
-        this.capturedPacket = null;
+        this.capturedPackets.clear();
         Rotation target = RotationHandler.targetRotation;
         this.savedYaw = target != null ? target.getYaw() : mc.player.getYRot();
         this.savedPitch = target != null ? target.getPitch() : mc.player.getXRot();
@@ -113,11 +120,13 @@ extends Module {
         }
         if (motionEvent.isPost()) {
             mc.player.setDeltaMovement(0.0, 0.0, 0.0);
-            if (this.stuckState == 1) {
+            // 队列非空即投递: 单包时和原来的 1→2 转换完全等价; 序列(换手→使用→释放→换回)
+            // 跨拍到达时逐次投递, 每次都先做朝向对齐。
+            if (this.stuckState == 1 && !this.capturedPackets.isEmpty()) {
                 this.stuckState = 2;
                 float currentYaw = mc.player.getYRot();
                 float currentPitch = mc.player.getXRot();
-                if (this.shouldSendCapturedPacket() && (this.savedYaw != currentYaw || this.savedPitch != currentPitch)) {
+                if (this.needsRotationSync() && (this.savedYaw != currentYaw || this.savedPitch != currentPitch)) {
                     PacketUtil.sendQueued(new ServerboundMovePlayerPacket.Rot(currentYaw, currentPitch, mc.player.onGround()));
                     while (!this.pongQueue.isEmpty()) {
                         PacketUtil.sendQueued((Packet<ServerGamePacketListener>) this.pongQueue.poll());
@@ -125,13 +134,19 @@ extends Module {
                     this.savedYaw = currentYaw;
                     this.savedPitch = currentPitch;
                 }
-                PacketUtil.sendQueued((Packet<ServerGamePacketListener>) this.capturedPacket);
+                while (!this.capturedPackets.isEmpty()) {
+                    PacketUtil.sendQueued((Packet<ServerGamePacketListener>) this.capturedPackets.poll());
+                }
             } else if (!this.isAntiVoidActive() && this.modeSetting.is("Packet") && mc.player.tickCount % 10 == 0) {
                 while (!this.pongQueue.isEmpty()) {
                     PacketUtil.sendQueued((Packet<ServerGamePacketListener>) this.pongQueue.poll());
                 }
             }
             if (this.pendingDisable) {
+                // 释放前把还捏着的包按序排空, 不丢件。
+                while (!this.capturedPackets.isEmpty()) {
+                    PacketUtil.sendQueued((Packet<ServerGamePacketListener>) this.capturedPackets.poll());
+                }
                 if (this.modeSetting.is("Delay")) {
                     PacketUtil.sendQueued(new ServerboundMovePlayerPacket.Pos(mc.player.getX() + 1337.0, mc.player.getY(), mc.player.getZ() + 1337.0, mc.player.onGround()));
                 } else {
@@ -151,13 +166,22 @@ extends Module {
         }
     }
 
-    private boolean shouldSendCapturedPacket() {
-        if (this.capturedPacket instanceof ServerboundUseItemPacket useItemPacket) {
-            ItemStack heldStack = mc.player.getItemInHand(useItemPacket.getHand());
-            return !(heldStack.getItem() instanceof BowlFoodItem) && !(heldStack.getItem() instanceof BowItem);
-        }
-        if (this.capturedPacket instanceof ServerboundPlayerActionPacket actionPacket) {
-            return actionPacket.getAction() == ServerboundPlayerActionPacket.Action.RELEASE_USE_ITEM && mc.player.getUseItem().getItem() instanceof BowItem;
+    /**
+     * 投递前是否需要朝向对齐包。队列里任意一个包命中即对齐(原单包逻辑的保序推广):
+     * 使用非碗装食物/非弓 时对齐; 弓的释放包对齐。碗装食物与弓的使用原逻辑就是不对齐, 保持。
+     */
+    private boolean needsRotationSync() {
+        for (Packet<ServerGamePacketListener> packet : this.capturedPackets) {
+            if (packet instanceof ServerboundUseItemPacket useItemPacket) {
+                ItemStack heldStack = mc.player.getItemInHand(useItemPacket.getHand());
+                if (!(heldStack.getItem() instanceof BowlFoodItem) && !(heldStack.getItem() instanceof BowItem)) {
+                    return true;
+                }
+            } else if (packet instanceof ServerboundPlayerActionPacket actionPacket
+                    && actionPacket.getAction() == ServerboundPlayerActionPacket.Action.RELEASE_USE_ITEM
+                    && mc.player.getUseItem().getItem() instanceof BowItem) {
+                return true;
+            }
         }
         return false;
     }
@@ -172,7 +196,7 @@ extends Module {
     @EventTarget
     public void onWorldChange(WorldChangeEvent worldChangeEvent) {
         this.stuckState = 3;
-        this.capturedPacket = null;
+        this.capturedPackets.clear();
         this.setEnabled(false);
     }
 
@@ -193,7 +217,12 @@ extends Module {
             this.pongQueue.offer((ServerboundPongPacket)packetEvent.getPacket());
             packetEvent.setCancelled(true);
         } else if (packetEvent.getPacket() instanceof ServerboundUseItemPacket || packetEvent.getPacket() instanceof ServerboundPlayerActionPacket) {
-            this.capturedPacket = packetEvent.getPacket();
+            // 状态 3 = 释放流程已启动(传送包在路上)。此时截获的包没人重放, 只会凭空消失,
+            // 所以放行而不是吞掉。
+            if (this.stuckState == 3) {
+                return;
+            }
+            this.capturedPackets.offer((Packet<ServerGamePacketListener>) packetEvent.getPacket());
             this.stuckState = 1;
             packetEvent.setCancelled(true);
         } else if (packetEvent.getPacket() instanceof ClientboundPlayerPositionPacket && this.modeSetting.is("Delay")) {
