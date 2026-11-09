@@ -135,9 +135,11 @@ extends Module {
 
     /**
      * 换槽 → useItem → 还槽的那一拍窗口。Scaffold/AutoGapple/MidPearl 用它避让。
+     * 静态访问走 INSTANCE, 与 MidPearl.isHandActive() 同一模式。
      */
-    public boolean isSwapping() {
-        return this.savedSlot != -1;
+    public static boolean isSwapping() {
+        AutoThrow instance = INSTANCE;
+        return instance != null && instance.isEnabled() && instance.savedSlot != -1;
     }
 
     @EventTarget
