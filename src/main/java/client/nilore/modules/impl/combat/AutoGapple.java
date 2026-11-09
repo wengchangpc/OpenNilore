@@ -20,7 +20,9 @@ import client.nilore.event.impl.WorldChangeEvent;
 import client.nilore.hud.ModuleListHud;
 import client.nilore.modules.Category;
 import client.nilore.modules.Module;
+import client.nilore.modules.impl.player.MidPearl;
 import client.nilore.modules.impl.player.Stuck;
+import client.nilore.modules.impl.movement.Scaffold;
 import client.nilore.settings.impl.BooleanSetting;
 import client.nilore.settings.impl.ModeSetting;
 import client.nilore.settings.impl.NumberSetting;
@@ -111,6 +113,8 @@ public class AutoGapple extends Module {
     private int countBefore;
     private boolean swappedHand;
     private boolean warnedAboutStuck;
+    /** Scaffold 与进食互斥, 提示只打一次, 免得每拍刷日志。 */
+    private boolean warnedAboutScaffold;
 
     public AutoGapple() {
         super("AutoGapple", Category.COMBAT);
@@ -259,6 +263,23 @@ public class AutoGapple extends Module {
             return false;
         }
 
+        // 主手所有权。这个模块独占主手的服务端槽位长达 40 拍 (Hotbar 模式更是靠主手进食),
+        // 只在没人占用时启动:
+        //  - 珍珠窗口(几拍)不撞: MidPearl 是按键触发的即时意图, 而且它反过来会 interrupt 我们。
+        //  - 投掷窗口(1拍)不撞: 等它还回来。
+        //  - Scaffold 长期持有主手槽位: 进食期间它每次 useItemOn 都会把 SET_CARRIED_ITEM
+        //    打回方块槽, 和本模块的槽位收发形成逐拍对撞 —— 这正是 BadPacketsA 要抓的
+        //    重复槽位包形状, 所以干脆不开, 而不是开着互相打。
+        if (MidPearl.isHandActive() || AutoThrow.isSwapping()) return false;
+        Scaffold scaffold = Scaffold.INSTANCE;
+        if (scaffold != null && scaffold.isEnabled()) {
+            if (!this.warnedAboutScaffold) {
+                this.warnedAboutScaffold = true;
+                logger.warn("AutoGapple: Scaffold is enabled — it owns the main-hand slot continuously; eating is paused while bridging.");
+            }
+            return false;
+        }
+
         if (this.trigger.is("Health") && mc.player.getHealth() > this.health.getValue().floatValue()) {
             return false;
         }
@@ -340,6 +361,22 @@ public class AutoGapple extends Module {
         }
         this.originalSlot = -1;
         this.appleSlot = -1;
+    }
+
+    /** 从选槽到槽位恢复完成, 服务端主手/副手归本模块管。 */
+    public boolean isBusy() {
+        return this.stage != Stage.IDLE;
+    }
+
+    /**
+     * 外部(目前是 MidPearl 的 claimHand)请求让出双手。
+     *
+     * <p>abort() 会 RELEASE_USE + 换回副手 + 恢复原槽位, 服务端侧不残留半交换状态。
+     * 金苹果没吃完不会消耗, 损失的只是这一次的进食进度。</p>
+     */
+    public void interrupt() {
+        if (this.stage == Stage.IDLE) return;
+        this.abort();
     }
 
     private void abort() {

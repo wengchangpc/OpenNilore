@@ -35,6 +35,8 @@ import client.nilore.event.impl.UpdateHeldItemEvent;
 import client.nilore.hud.ModuleListHud;
 import client.nilore.modules.Category;
 import client.nilore.modules.Module;
+import client.nilore.modules.impl.combat.AutoThrow;
+import client.nilore.modules.impl.player.MidPearl;
 import client.nilore.render.FontPresets;
 import client.nilore.render.FontRenderer;
 import client.nilore.render.GlHelper;
@@ -234,7 +236,13 @@ public class Scaffold extends Module {
     @EventTarget(value = 1)
     public void onTick(TickEvent event) {
         if (mc.player == null) return;
-        if (this.slotActive && this.slotActiveTick != this.slotTicks) {
+        // 主手所有权让路。本模块 onTick 是 HIGH 优先级, 在 MidPearl/AutoThrow 之前跑;
+        // 不让路的话, 每一拍都会先把它们刚选好的槽位抢回方块 —— MidPearl 的 throwPearl
+        // 检查 getMainHandItem, 抢回等于珍珠永远扔不出去, 双方的槽位恢复还会互相打架。
+        // 珍珠窗口约 5 拍、投掷窗口 1 拍, 搭路短暂停一下是可接受的代价。
+        // 放置本身不用拦: 手里是珍珠/雪球时 hasPlaceableInHand 自然不过。
+        boolean handOwnedByOther = MidPearl.isHandActive() || AutoThrow.isSwapping();
+        if (!handOwnedByOther && this.slotActive && this.slotActiveTick != this.slotTicks) {
             mc.player.getInventory().selected = this.altSlot;
             this.slotActive = false;
         }
@@ -257,7 +265,7 @@ public class Scaffold extends Module {
         boolean hasBlocks = offhandPlaceable || placeableSlot != -1;
 
         // Switch Mode logic
-        if (placeableSlot != -1 && placeableSlot != mc.player.getInventory().selected) {
+        if (!handOwnedByOther && placeableSlot != -1 && placeableSlot != mc.player.getInventory().selected) {
             if (!this.slotActive) {
                 this.altSlot = mc.player.getInventory().selected;
             }

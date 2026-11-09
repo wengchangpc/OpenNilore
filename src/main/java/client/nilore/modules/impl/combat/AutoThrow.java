@@ -21,6 +21,7 @@ import client.nilore.event.impl.TickEvent;
 import client.nilore.modules.Category;
 import client.nilore.modules.Module;
 import client.nilore.modules.impl.movement.Scaffold;
+import client.nilore.modules.impl.player.MidPearl;
 import client.nilore.modules.impl.player.Stuck;
 import client.nilore.settings.impl.NumberSetting;
 import client.nilore.utils.animation.Timer;
@@ -71,7 +72,16 @@ extends Module {
         if (mc.player == null || mc.level == null || mc.gameMode == null || mc.getConnection() == null) {
             return;
         }
-        if (Scaffold.INSTANCE != null && Scaffold.INSTANCE.isEnabled() || Stuck.INSTANCE != null && Stuck.INSTANCE.isEnabled() || mc.player.isUsingItem() || mc.screen != null) {
+        // 主手占用互斥: Scaffold 长期持有主手(原有), 珍珠窗口是按键即时意图, 进食窗口
+        // 40 拍 —— 都在占用时直接放弃这一轮瞄准, 不和它们抢槽位。
+        AutoGapple autoGapple = AutoGapple.INSTANCE;
+        boolean handBusy = (Scaffold.INSTANCE != null && Scaffold.INSTANCE.isEnabled())
+                || (Stuck.INSTANCE != null && Stuck.INSTANCE.isEnabled())
+                || MidPearl.isHandActive()
+                || (autoGapple != null && autoGapple.isBusy())
+                || mc.player.isUsingItem()
+                || mc.screen != null;
+        if (handBusy) {
             this.ticksUntilThrow = 0;
             this.targetRotation = null;
             return;
@@ -123,6 +133,13 @@ extends Module {
         }
     }
 
+    /**
+     * 换槽 → useItem → 还槽的那一拍窗口。Scaffold/AutoGapple/MidPearl 用它避让。
+     */
+    public boolean isSwapping() {
+        return this.savedSlot != -1;
+    }
+
     @EventTarget
     public void onTick(TickEvent tickEvent) {
         if (mc.player == null) {
@@ -132,6 +149,9 @@ extends Module {
             mc.player.getInventory().selected = this.savedSlot;
             this.savedSlot = -1;
             RotationHandler.isRotating = false;
+            // 换出去的时候调了 sendCarriedItem, 还回来这一步原来漏了 —— 服务端会一直
+            // 以为手里还是雪球, 直到下一个 attack/use 顺手冲掉。补上才是对称的。
+            PlayerUtil.sendCarriedItem();
         }
     }
 

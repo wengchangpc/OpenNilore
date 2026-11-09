@@ -14,6 +14,8 @@ import org.lwjgl.glfw.GLFW;
 import client.nilore.event.impl.TickEvent;
 import client.nilore.modules.Category;
 import client.nilore.modules.Module;
+import client.nilore.modules.impl.combat.AutoGapple;
+import client.nilore.modules.impl.combat.AutoThrow;
 import client.nilore.modules.impl.combat.KillAura;
 import client.nilore.modules.impl.misc.AutoRod;
 import client.nilore.modules.impl.movement.FireballBlink;
@@ -150,6 +152,41 @@ public class MidPearl extends Module {
         targetRotation = null;
         this.preThrowTicks = 0;
         this.isHoldingIntercept = false;
+    }
+
+    /**
+     * 主手当前是否被本模块占用: 从按下选槽到槽位完全恢复的整个窗口。
+     *
+     * <p>Scaffold 的 onTick 是 HIGH 优先级、每拍最先跑, 靠这个标志给珍珠让路;
+     * AutoGapple 靠它拒绝在窗口中间开吃。判据是"本模块还有恢复动作没做完",
+     * 而不是 enabled —— 光开着没按按钮不占手。</p>
+     */
+    public static boolean isHandActive() {
+        MidPearl instance = INSTANCE;
+        if (instance == null || !instance.isEnabled()) {
+            return false;
+        }
+        return instance.throwPhaseActive || instance.pearlSlotSelected
+                || instance.throwCountdown > 0 || instance.disableDelay > 0
+                || instance.postThrowTicks > 0;
+    }
+
+    /**
+     * 拿主手之前清场。
+     *
+     * <p>优先级规则: 珍珠是按键触发的即时意图, 窗口只有几拍; 吃苹果窗口 40 拍,
+     * 打断它代价小(金苹果没吃完不消耗, 只是这次作废)且收益明确 —— 所以
+     * AutoGapple 被抢占。AutoThrow 的窗口只有 1 拍, 抢它反而更容易撞车,
+     * 等一拍再继续。</p>
+     *
+     * @return false = 本拍拿不到手, 调用方等下一拍重试
+     */
+    private boolean claimHand() {
+        AutoGapple autoGapple = AutoGapple.INSTANCE;
+        if (autoGapple != null && autoGapple.isBusy()) {
+            autoGapple.interrupt();
+        }
+        return !AutoThrow.isSwapping();
     }
 
     private int getMouseButton(ModeSetting setting) {
@@ -290,6 +327,8 @@ public class MidPearl extends Module {
     private void selectPearlSlot(int slot) {
         if (slot == -1 || slot > 8) return;
         if (this.throwPhaseActive) return;
+        // 手上有别的短窗口主人时这一拍先不抢, 按键还按着下一拍会重试。
+        if (!this.claimHand()) return;
         this.throwPhaseActive = true;
         this.preThrowTicks = 2;
         this.rodSavedSlot = mc.player.getInventory().selected;
@@ -330,7 +369,7 @@ public class MidPearl extends Module {
         if (pressed) {
             if (!this.pearlSlotSelected) {
                 int slot = ItemUtil.getSlot(Items.ENDER_PEARL);
-                if (slot != -1 && slot < 9) {
+                if (slot != -1 && slot < 9 && this.claimHand()) {
                     this.pearlSlotSelected = true;
                     this.pearlSavedSlot = mc.player.getInventory().selected;
                     // 原来这里 KillAura.INSTANCE.setEnabled(false) —— 松手前光环照常打。
