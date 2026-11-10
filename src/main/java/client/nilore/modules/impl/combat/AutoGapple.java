@@ -55,9 +55,17 @@ import client.nilore.utils.misc.PacketUtil;
  *       what vanilla would send.</li>
  *   <li>Attempts are rate limited with optional jitter — a machine-precise "eat at exactly
  *       32 ticks, every time" pattern is trivial to filter out statistically.</li>
- *   <li>{@code Freeze} zeroes movement input while the apple is going down, so the server's
- *       "using an item" movement expectation still matches if a check models it. Rotation and
- *       attacks are untouched, so KillAura keeps working.</li>
+ *   <li>Damage interrupts the eat server side: {@code LivingEntity.hurt} calls
+ *       {@code stopUsingItem} before anything the client can do about it, so the old
+ *       behavior of "keep the use open and wait for the 40-tick timeout" just burned the
+ *       whole window. Now a fresh hurt (hurtTime rising edge) aborts immediately —
+ *       RELEASE_USE_ITEM, swap back, slot restore — and starts a Hit Cooldown, because
+ *       re-starting the eat while still under fire feeds the same interrupt loop.</li>
+ *   <li>{@code Freeze Movement} has three modes. {@code Slow} (default) scales the movement
+ *       input to the 0.2 factor vanilla applies while using an item, which is what a real
+ *       player eating looks like; {@code Freeze} zeroes it entirely; {@code Off} leaves
+ *       input alone. Rotation and attacks are untouched in all three, so KillAura keeps
+ *       working.</li>
  *   <li>The original hotbar slot is always restored; state is reset on world change and on
  *       disable so nothing is left half swapped.</li>
  * </ul>
@@ -93,7 +101,20 @@ public class AutoGapple extends Module {
             () -> this.trigger.is("Health"));
     public final BooleanSetting onlyWithKillAura = new BooleanSetting("Only With KillAura", true);
     public final BooleanSetting preferEnchanted = new BooleanSetting("Prefer Enchanted", true);
-    public final BooleanSetting freeze = new BooleanSetting("Freeze", true);
+    /**
+     * 进食期间的移动输入语义:
+     * <ul>
+     *   <li>{@code Slow} — 输入乘 0.2, 即原版 using-item 的减速乘数。真人吃苹果就是这么
+     *       移动的, 服务端若按 "进食 ⇒ 移动乘 0.2" 建模, 这个形状完全吻合。</li>
+     *   <li>{@code Freeze} — 全零 (旧行为)。完全静止虽然也满足任何 "≤ 减速" 的检查,
+     *       但观战视角下静止吃 40 拍本身就是异常形状。</li>
+     *   <li>{@code Off} — 不干预。</li>
+     * </ul>
+     */
+    public final ModeSetting freezeMode = new ModeSetting("Freeze Movement", "Slow", "Freeze", "Off");
+
+    /** 挨打后暂停进食的拍数: 打断是服务端行为, 还在挨打时立刻重吃只会再被打断。 */
+    public final NumberSetting hitCooldown = new NumberSetting("Hit Cooldown", 20, 0, 100, 1);
 
     public final NumberSetting interval = new NumberSetting("Interval", 40, 0, 200, 5);
     public final NumberSetting jitter = new NumberSetting("Jitter", 10, 0, 60, 1);
@@ -118,6 +139,10 @@ public class AutoGapple extends Module {
     private boolean swappedHand;
     /** Scaffold 与进食互斥, 提示只打一次, 免得每拍刷日志。 */
     private boolean warnedAboutScaffold;
+    /** 挨打门控剩余拍数 (区别于 interval 的常规节奏冷却)。 */
+    private int hitCooldownTicks;
+    /** 上一拍的 hurtTime, 用于识别上升沿 = 一次新的伤害。 */
+    private int lastHurtTime;
 
     public AutoGapple() {
         super("AutoGapple", Category.COMBAT);
@@ -133,12 +158,16 @@ public class AutoGapple extends Module {
     public void onDisable() {
         this.abort();
         this.cooldownTicks = 0;
+        this.hitCooldownTicks = 0;
+        this.lastHurtTime = 0;
     }
 
     @EventTarget
     public void onWorldChange(WorldChangeEvent event) {
         this.abort();
         this.cooldownTicks = 0;
+        this.hitCooldownTicks = 0;
+        this.lastHurtTime = 0;
     }
 
     @EventTarget
@@ -148,10 +177,26 @@ public class AutoGapple extends Module {
         if (this.cooldownTicks > 0) {
             this.cooldownTicks--;
         }
+        if (this.hitCooldownTicks > 0) {
+            this.hitCooldownTicks--;
+        }
+
+        // 伤害上升沿: hurtTime 由 ClientboundEntityEventPacket(HURT) 置位, 任何伤害都会
+        // 触发, 吸收值挡住的也算 —— 而服务端此时已经跑完 stopUsingItem, 进食已被打断。
+        // 立刻止损 (abort) 并进入挨打门控, 不让状态机干等 40 拍超时。
+        int hurtTime = mc.player.hurtTime;
+        boolean justHurt = hurtTime > 0 && this.lastHurtTime == 0;
+        this.lastHurtTime = hurtTime;
+        if (justHurt) {
+            if (this.stage != Stage.IDLE) {
+                this.abort();
+            }
+            this.hitCooldownTicks = this.hitCooldown.getValue().intValue();
+        }
 
         switch (this.stage) {
             case IDLE -> {
-                if (this.cooldownTicks > 0) return;
+                if (this.cooldownTicks > 0 || this.hitCooldownTicks > 0) return;
                 if (this.canStart()) this.beginEat();
             }
             case SELECT_SLOT -> {
@@ -181,16 +226,26 @@ public class AutoGapple extends Module {
         }
     }
 
-    /** Zeroes movement input while the apple is being eaten — the "stuck" part of the trick. */
+    /**
+     * 进食期间的移动输入整形。三种语义见 {@link #freezeMode} 的 javadoc —— 核心区别:
+     * {@code Slow} 是 0.2 乘法 (原版 using-item 减速的精确形状), {@code Freeze} 是全零。
+     */
     @EventTarget
     public void onStrafe(StrafeEvent event) {
-        if (!this.freeze.getValue()) return;
+        if (this.freezeMode.is("Off")) return;
         if (this.stage != Stage.SELECT_SLOT && this.stage != Stage.START_USE && this.stage != Stage.EATING) {
             return;
         }
-        event.setForward(0.0f);
-        event.setStrafe(0.0f);
-        event.setJumping(false);
+        if (this.freezeMode.is("Slow")) {
+            // 原版 aiStep 对 using-item 玩家 setSpeed(f * 0.2F) —— 这里对输入做同样的
+            // 乘法, 观感与运动学都与真人进食一致; jumping 不动 (原版进食时也允许跳)。
+            event.setForward(event.getForward() * 0.2f);
+            event.setStrafe(event.getStrafe() * 0.2f);
+        } else {
+            event.setForward(0.0f);
+            event.setStrafe(0.0f);
+            event.setJumping(false);
+        }
     }
 
     /**
