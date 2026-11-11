@@ -25,6 +25,7 @@ import client.nilore.manager.TargetManager;
 import client.nilore.patch.ChatComponentPatch;
 import client.nilore.patch.ChatScreenPatch;
 import client.nilore.patch.ClientLevelPatch;
+import client.nilore.patch.AbstractClientPlayerPatch;
 import client.nilore.patch.ConnectionPatch;
 import client.nilore.patch.EntityPatch;
 import client.nilore.patch.EntityRenderDispatcherPatch;
@@ -205,6 +206,7 @@ public class NiloreClient extends ClientBase {
         PatchRegistry.register(FriendlyByteBufPatch.class);
         PatchRegistry.register(GuiPatch.class);
         PatchRegistry.register(ParticleEnginePatch.class);
+        PatchRegistry.register(AbstractClientPlayerPatch.class);
 
         // Compatibility patch for Embeddium/Sodium's BlockOcclusionCache.
         // Always registered so the transformer can catch the class when it

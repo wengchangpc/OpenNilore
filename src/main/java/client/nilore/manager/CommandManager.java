@@ -17,6 +17,7 @@ import client.nilore.command.impl.LanguageCommand;
 import client.nilore.command.impl.MusicCommand;
 import client.nilore.command.impl.NameProtectCommand;
 import client.nilore.command.impl.ReconnectCommand;
+import client.nilore.command.impl.SkinCommand;
 import client.nilore.command.impl.ToggleCommand;
 import client.nilore.event.impl.ChatEvent;
 import client.nilore.utils.misc.ChatUtil;
@@ -43,6 +44,7 @@ public class CommandManager {
         this.registerCommand(new MusicCommand());
         this.registerCommand(new NameProtectCommand());
         this.registerCommand(new ReconnectCommand());
+        this.registerCommand(new SkinCommand());
     }
 
     private void registerCommand(Command command) {
