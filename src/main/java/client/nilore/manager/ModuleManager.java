@@ -142,10 +142,13 @@ public class ModuleManager extends ClientBase {
         this.register(new EntityDuang());
         this.register(new AudioVisualizer());
         this.register(new Cape());
+        this.register(new Cosmetics());
         this.register(new FakeAntiAim());
+        this.register(new FirstPersonModel());
         this.register(new FullBright());
         this.register(new Interface());
         this.register(new ItemTags());
+        this.register(new KillEffect());
         this.register(new LyricsModule());
         this.register(new NameProtect());
         this.register(new NameTags());
@@ -154,6 +157,7 @@ public class ModuleManager extends ClientBase {
         this.register(new OldHitting());
         this.register(new Projectiles());
         this.register(new Skin());
+        this.register(new SkinGlow());
         this.register(new TimeWeather());
         this.register(new Watermark());
         this.register(new Wings());

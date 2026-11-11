@@ -11,6 +11,7 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import client.nilore.NiloreClient;
 import client.nilore.modules.impl.render.BetterFPS;
+import client.nilore.modules.impl.render.FirstPersonModel;
 import client.nilore.modules.impl.render.NameTags;
 
 @Patch(EntityRenderer.class)
@@ -22,6 +23,14 @@ public class EntityRendererPatch {
     )
     public static void onRenderNameTag(EntityRenderer<?> renderer, Entity entity, Component component, PoseStack poseStack, MultiBufferSource bufferSource, int packedLight, CallbackInfo callbackInfo) {
         if (!NiloreClient.isReady()) {
+            return;
+        }
+        // FirstPersonModel: 第一人称补画的自己带着一条头顶名字牌, 低头看身体时
+        // 名字牌悬在视线中央挡视野, 一律取消。
+        if (entity == net.minecraft.client.Minecraft.getInstance().player
+                && FirstPersonModel.INSTANCE != null && FirstPersonModel.INSTANCE.isEnabled()
+                && net.minecraft.client.Minecraft.getInstance().options.getCameraType().isFirstPerson()) {
+            callbackInfo.cancel();
             return;
         }
         // NameTags 自己接管名字牌时, 原版这一个整个不画。
