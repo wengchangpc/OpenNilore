@@ -66,7 +66,10 @@ public class FirstPersonModel extends Module {
         if (!(dispatcher.getRenderer(mc.player) instanceof PlayerRenderer playerRenderer)) {
             return;
         }
-        if (!(playerRenderer.getModel() instanceof PlayerModel<?> model)) {
+        // PlayerRenderer 的 getModel() 静态类型已是 PlayerModel<AbstractClientPlayer>,
+        // 再 instanceof PlayerModel<?> 会被判"表达式类型已是模式类型的子类型"而编译报错。
+        PlayerModel<?> model = playerRenderer.getModel();
+        if (model == null) {
             return;
         }
 
