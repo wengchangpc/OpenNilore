@@ -35,7 +35,9 @@ import client.nilore.patch.GuiPatch;
 import client.nilore.patch.BlockOcclusionCachePatch;
 import client.nilore.patch.BlockEntityRenderDispatcherPatch;
 import client.nilore.patch.GameRendererPatch;
+import client.nilore.patch.HumanoidArmorLayerPatch;
 import client.nilore.patch.HumanoidModelPatch;
+import client.nilore.patch.CustomHeadLayerPatch;
 import client.nilore.patch.ItemInHandLayerPatch;
 import client.nilore.patch.ItemInHandRendererPatch;
 import client.nilore.patch.ItemPatch;
@@ -207,6 +209,10 @@ public class NiloreClient extends ClientBase {
         PatchRegistry.register(GuiPatch.class);
         PatchRegistry.register(ParticleEnginePatch.class);
         PatchRegistry.register(AbstractClientPlayerPatch.class);
+        // FirstPersonModel 的配套: 头盔 / 头戴物是各自 layer 里的 model, 不受
+        // PlayerModel.head.visible 影响, 第一人称下必须单独屏蔽, 否则视野被内壁铺满。
+        PatchRegistry.register(HumanoidArmorLayerPatch.class);
+        PatchRegistry.register(CustomHeadLayerPatch.class);
 
         // Compatibility patch for Embeddium/Sodium's BlockOcclusionCache.
         // Always registered so the transformer can catch the class when it

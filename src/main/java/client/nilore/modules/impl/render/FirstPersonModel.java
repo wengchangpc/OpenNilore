@@ -8,6 +8,7 @@ import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.entity.EntityRenderDispatcher;
 import net.minecraft.client.renderer.entity.player.PlayerRenderer;
 import net.minecraft.util.Mth;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.phys.Vec3;
 import client.nilore.event.EventTarget;
 import client.nilore.event.impl.RenderEvent;
@@ -48,6 +49,31 @@ public class FirstPersonModel extends Module {
     public FirstPersonModel() {
         super("FirstPersonModel", Category.RENDER);
         INSTANCE = this;
+    }
+
+    /**
+     * 第一人称补画自己时, 头部这一圈的"额外几何"要不要一起跳过。
+     *
+     * <p>只把 {@code PlayerModel.head/hat} 置灰是不够的: {@code EntityRenderDispatcher.render}
+     * 会把 {@code PlayerRenderer} 的**整条 layer 链**一起走, 其中至少两处在头部生成立体:
+     * {@code HumanoidArmorLayer} 的头盔、{@code CustomHeadLayer} 的头戴物 (南瓜/头颅)。
+     * 它们的部件属于各自的 model 实例, 与 {@code PlayerModel.head.visible} 无关。</p>
+     *
+     * <p>相机就在眼位 (脚上 1.62 格), 正是头部立方体内部: 头皮肤藏掉了, 头盔还在, 于是整个
+     * 视野被头盔内壁铺满 —— 表现就是"第一人称只能看见自己的头", 且调 Hide Head 完全没用。</p>
+     */
+    public static boolean skipOwnHeadLayers(LivingEntity entity) {
+        FirstPersonModel fpm = INSTANCE;
+        if (fpm == null || !fpm.isEnabled() || entity == null) {
+            return false;
+        }
+        if (!fpm.hideHead.getValue()) {
+            return false;
+        }
+        if (mc == null || mc.player == null || entity != mc.player) {
+            return false;
+        }
+        return mc.options.getCameraType().isFirstPerson();
     }
 
     @EventTarget
