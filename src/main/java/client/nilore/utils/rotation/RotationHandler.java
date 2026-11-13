@@ -45,6 +45,20 @@ public class RotationHandler
     public static Rotation prevSentRotation;
     public static boolean isRotating;
 
+    /**
+     * 当前这拍的静默旋转是否允许驱动自己人物模型的头部。
+     *
+     * <p>Scaffold 的放置朝向是 {@code realYaw - 180}(正后方) 加一个 75.5° 的俯角, 交给
+     * {@link #setTargetRotation} 只应该用于发出去的移动包和射线; 但 {@link #onHeadTurn} /
+     * {@link #onCameraPitch} 会把它写进渲染用的头部 yaw/pitch, 结果就是搭路时视角没动、
+     * 模型的头却整个反过去并且低头 —— 第三人称和 FPM 下都是一眼可见的"转头"。真人不可能
+     * 让头和视线分家 180°, 这同时也是 Grim 一类 aim 检查的形状。</p>
+     *
+     * <p>放置是"身体朝向不变、只有手伸出去"的动作, 头部应该继续跟着真实视线; 而战斗类
+     * 静默旋转 (光环/水晶/珍珠) 让头跟着目标反而是对的, 所以只对 Scaffold 关掉。</p>
+     */
+    private static boolean headFollowsRotation = true;
+
     public static void setTargetRotation(Rotation rotation) {
         targetRotation = rotation;
         float y = rotation.getYaw();
@@ -98,6 +112,7 @@ public class RotationHandler
             MidPearl midPearl = MidPearl.INSTANCE;
             BowAimbot bowAimbot = BowAimbot.INSTANCE;
             isRotating = true;
+            headFollowsRotation = true;
             if (autoMLG != null && autoMLG.isEnabled() && autoMLG.targetRotation != null) {
                 RotationHandler.setTargetRotation(autoMLG.targetRotation);
                 autoMLG.targetRotation = null;
@@ -123,6 +138,8 @@ public class RotationHandler
                 RotationHandler.setTargetRotation(autoThrow.targetRotation);
             } else if (scaffold != null && scaffold.isEnabled() && scaffold.rots != null) {
                 RotationHandler.setTargetRotation(scaffold.rots);
+                // 放置朝向只进包, 不进模型头部(见 headFollowsRotation 的说明)。
+                headFollowsRotation = false;
             } else if (killAura != null && killAura.isEnabled() && KillAura.target != null && killAura.rotation != null) {
                 RotationHandler.setTargetRotation(new Rotation(killAura.rotation.getYaw(), killAura.rotation.getPitch()));
             } else if (TargetStrafe.INSTANCE != null && TargetStrafe.isOrbiting()) {
@@ -137,6 +154,9 @@ public class RotationHandler
 
     @EventTarget
     public void onHeadTurn(RotationAnimationEvent e) {
+        if (!headFollowsRotation) {
+            return;
+        }
         if (sentRotation != null && prevSentRotation != null && mc.player != null && isRotating) {
             e.setYaw(sentRotation.getYaw());
             e.setLastYaw(prevSentRotation.getYaw());
@@ -148,6 +168,9 @@ public class RotationHandler
 
     @EventTarget
     public void onCameraPitch(CameraPitchEvent cameraPitchEvent) {
+        if (!headFollowsRotation) {
+            return;
+        }
         if (sentRotation != null && prevSentRotation != null) {
             cameraPitchEvent.setPitch(sentRotation.getPitch());
         }
