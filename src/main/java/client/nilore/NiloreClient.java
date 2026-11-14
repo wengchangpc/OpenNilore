@@ -25,7 +25,6 @@ import client.nilore.manager.TargetManager;
 import client.nilore.patch.ChatComponentPatch;
 import client.nilore.patch.ChatScreenPatch;
 import client.nilore.patch.ClientLevelPatch;
-import client.nilore.patch.AbstractClientPlayerPatch;
 import client.nilore.patch.ConnectionPatch;
 import client.nilore.patch.EntityPatch;
 import client.nilore.patch.EntityRenderDispatcherPatch;
@@ -33,11 +32,8 @@ import client.nilore.patch.EntityRendererPatch;
 import client.nilore.patch.FriendlyByteBufPatch;
 import client.nilore.patch.GuiPatch;
 import client.nilore.patch.BlockOcclusionCachePatch;
-import client.nilore.patch.BlockEntityRenderDispatcherPatch;
 import client.nilore.patch.GameRendererPatch;
-import client.nilore.patch.HumanoidArmorLayerPatch;
 import client.nilore.patch.HumanoidModelPatch;
-import client.nilore.patch.CustomHeadLayerPatch;
 import client.nilore.patch.ItemInHandLayerPatch;
 import client.nilore.patch.ItemInHandRendererPatch;
 import client.nilore.patch.ItemPatch;
@@ -50,7 +46,6 @@ import client.nilore.patch.LocalPlayerPatch;
 import client.nilore.patch.MinecraftPatch;
 import client.nilore.patch.MouseHandlerPatch;
 import client.nilore.patch.PacketUtilsPatch;
-import client.nilore.patch.ParticleEnginePatch;
 import client.nilore.patch.PlayerPatch;
 import client.nilore.patch.PlayerTabOverlayPatch;
 import client.nilore.asm.Bootstrap;
@@ -196,7 +191,6 @@ public class NiloreClient extends ClientBase {
         PatchRegistry.register(ChatComponentPatch.class);
         PatchRegistry.register(EntityRendererPatch.class);
         PatchRegistry.register(EntityRenderDispatcherPatch.class);
-        PatchRegistry.register(BlockEntityRenderDispatcherPatch.class);
         PatchRegistry.register(LevelRendererPatch.class);
         PatchRegistry.register(GameRendererPatch.class);
         PatchRegistry.register(ItemInHandRendererPatch.class);
@@ -207,12 +201,6 @@ public class NiloreClient extends ClientBase {
         PatchRegistry.register(PlayerTabOverlayPatch.class);
         PatchRegistry.register(FriendlyByteBufPatch.class);
         PatchRegistry.register(GuiPatch.class);
-        PatchRegistry.register(ParticleEnginePatch.class);
-        PatchRegistry.register(AbstractClientPlayerPatch.class);
-        // FirstPersonModel 的配套: 头盔 / 头戴物是各自 layer 里的 model, 不受
-        // PlayerModel.head.visible 影响, 第一人称下必须单独屏蔽, 否则视野被内壁铺满。
-        PatchRegistry.register(HumanoidArmorLayerPatch.class);
-        PatchRegistry.register(CustomHeadLayerPatch.class);
 
         // Compatibility patch for Embeddium/Sodium's BlockOcclusionCache.
         // Always registered so the transformer can catch the class when it
@@ -222,35 +210,20 @@ public class NiloreClient extends ClientBase {
         PatchRegistry.register(BlockOcclusionCachePatch.class);
     }
 
-    /**
-     * Cached result of the reflective {@code Minecraft.instance} lookup. The field
-     * walk only has to happen once per JVM: the singleton never changes, and the
-     * patches call this from {@code Minecraft.tick()} on every client start.
-     */
-    private static volatile Minecraft mcInstance;
-
     public static Minecraft getMcInstance() {
-        Minecraft cached = mcInstance;
-        if (cached != null) {
-            return cached;
-        }
         Minecraft minecraft = null;
         try {
             Class<?> clazz = Minecraft.class;
             for (Field field : clazz.getDeclaredFields()) {
-                if (field.getType() != clazz || !field.trySetAccessible()) continue;
+                if (field.getType() != clazz) continue;
+                field.setAccessible(true);
                 minecraft = (Minecraft) field.get(null);
+                field.setAccessible(false);
             }
         } catch (Throwable throwable) {
-            logger.error("Reflective Minecraft instance lookup failed, falling back to Minecraft.getInstance()", throwable);
+            throwable.printStackTrace();
         }
-        if (minecraft == null) {
-            minecraft = Minecraft.getInstance();
-        }
-        if (minecraft != null) {
-            mcInstance = minecraft;
-        }
-        return minecraft;
+        return minecraft != null ? minecraft : Minecraft.getInstance();
     }
 
 }

@@ -46,7 +46,6 @@ import client.nilore.NiloreClient;
 import client.nilore.event.impl.EventAttackSlowdown;
 import client.nilore.event.impl.PreMotionEvent;
 import client.nilore.event.impl.RenderEvent;
-import client.nilore.event.impl.SprintEvent;
 import client.nilore.event.impl.TickEvent;
 import client.nilore.event.impl.WorldChangeEvent;
 import client.nilore.hud.ModuleListHud;
@@ -105,8 +104,10 @@ public class KillAura extends Module {
     public final BooleanSetting infSwitch       = new BooleanSetting("Infinity Switch", false);
     public final BooleanSetting preferBaby      = new BooleanSetting("Prefer Baby", false);
     public final BooleanSetting morePart        = new BooleanSetting("More Particles", false);
+    public final BooleanSetting circle         = new BooleanSetting("Circle", false);
 
     public final BooleanSetting keepSprint = new BooleanSetting("Keep Sprint", true);
+    public final BooleanSetting fallOnly = new BooleanSetting("Only Falling Attack", true);
     public final BooleanSetting throughWalls    = new BooleanSetting("Through Walls", false);
     public final NumberSetting throughWallsRange = new NumberSetting("Through Walls Range", 3.0, 1.0, 6.0, 0.1,
             () -> (Boolean) this.throughWalls.getValue());
@@ -131,6 +132,7 @@ public class KillAura extends Module {
     private int attackTimes;
     private float attacks;
     private int targetIndex;
+    private boolean bypassKS;
     public int sprintTickCounter;
     /** RotationHandler 每 tick 拾取的瞄准朝向 (Naven: RotationManager.rotations)。 */
     public Rotation rotation;
@@ -149,7 +151,7 @@ public class KillAura extends Module {
         target = null;
         aimingTarget = null;
         targetList.clear();
-        clearPause();
+        this.bypassKS = true;
         super.onEnable();
     }
 
@@ -161,7 +163,7 @@ public class KillAura extends Module {
         this.sprintTickCounter = 0;
         this.attackTimes = 0;
         this.rotation = null;
-        clearPause();
+        this.bypassKS = true;
         super.onDisable();
     }
 
@@ -192,6 +194,7 @@ public class KillAura extends Module {
             targetList.clear();
             this.sprintTickCounter = 0;
             this.attacks = 0.0f;
+            this.bypassKS = true;
             return;
         }
 
@@ -206,13 +209,11 @@ public class KillAura extends Module {
         aimingTarget = this.shouldPreAim();
 
         // Naven: rotationData = getRotationDataToEntity(aimingTarget); rotation = data.getRotation()
-        // 投掷停摆窗口内不向 RotationHandler 供朝向: 静默转向会把珍珠甩向目标而不是准心方向。
-        this.rotation = this.aimingTarget != null && !isPaused()
-                ? this.aimRotationTo(this.aimingTarget)
-                : null;
+        this.rotation = this.aimingTarget != null ? this.aimRotationTo(this.aimingTarget) : null;
 
         if (targetList.isEmpty()) {
             target = null;
+            this.bypassKS = true;
             return;
         }
 
@@ -262,21 +263,22 @@ public class KillAura extends Module {
             }
             return;
         }
-        // 投掷停摆: 只吞掉这一拍的出刀, 模块保持启用, 蓄力照常累积, 窗口一过立刻继续打。
-        if (isPaused()) {
-            return;
-        }
         // Naven onClick 闸门: 用物品为空 + 无界面 + 无 lag + 1.9 冷却; 外加 NoXZ 互斥。
         if (mc.player.getUseItem().isEmpty()
                 && mc.screen == null
-                && (this.ignoreSkipTicks.getValue() || ClientBase.delayPackets.isEmpty()
-                        || (Critical.INSTANCE != null && Critical.INSTANCE.isEnabled()))
-                && !NoXZMode.isCountering()
-                && !(NoXZMode.isInDelayWindow() && shouldKeepSprintInDelayWindow())) {
+                && (this.ignoreSkipTicks.getValue() || ClientBase.delayPackets.isEmpty())
+                && !NoXZMode.isCountering()) {
             if (this.delayMode.is("1.9") && mc.player.getAttackStrengthScale(0.0f) < 0.95f) {
                 return;
             }
+            if (this.holdAttackForFall()) {
+                return;
+            }
             while (this.attacks >= 1.0f) {
+                if (this.shouldDropSprintForCrit()) {
+                    this.stopSprint();
+                    return;
+                }
                 this.doAttack();
                 this.attacks -= 1.0f;
             }
@@ -403,10 +405,6 @@ public class KillAura extends Module {
         if (mc.player == null || mc.getConnection() == null || mc.gameMode == null) {
             return false;
         }
-        // 停摆窗口也挡住外部调用者 (NoXZ 反击 / Critical): 它们同样会改朝向+发攻击包。
-        if (isPaused()) {
-            return false;
-        }
         if (NoXZMode.isCountering()) {
             return false;
         }
@@ -415,6 +413,7 @@ public class KillAura extends Module {
         }
 
         ++this.attackTimes;
+        this.bypassKS = false;
         float currentYaw = mc.player.getYRot();
         float currentPitch = mc.player.getXRot();
         Rotation aim = this.rotation != null ? this.rotation : this.attackRotation();
@@ -541,9 +540,9 @@ public class KillAura extends Module {
         return AutoWebPlace.INSTANCE != null && AutoWebPlace.INSTANCE.isEnabled() && AutoWebPlace.targetRotation != null;
     }
 
-    // ===== 外部 API (NoXZMode / Critical / Sprint / RotationHandler 依赖) =====
+    // ===== 外部 API (NoXZMode / Sprint / RotationHandler 依赖) =====
 
-    /** One attack per client tick, shared by the aura, NoXZMode's counter and Critical. */
+    /** One attack per client tick, shared by the aura and NoXZMode's counter. */
     public static boolean attackAndLock() {
         long tick = mc.level != null ? mc.level.getGameTime()
                 : (mc.player != null ? mc.player.tickCount : 0);
@@ -555,45 +554,6 @@ public class KillAura extends Module {
     }
 
     private static long attackLockTick = -1L;
-
-    // ===== 投掷瞬间停摆 (MidPearl 联动) =====
-
-    /** 停摆到哪一拍为止 (gameTime 时间戳)。默认值保证未触发时永远返回 false。 */
-    private static long pauseUntilTick = Long.MIN_VALUE;
-
-    /**
-     * 让光环停摆 {@code ticks} 拍。
-     *
-     * <p>MidPearl 原本在选中珍珠槽时直接 {@code setEnabled(false)}: 目标状态、APS 蓄力、
-     * 朝向全部归零, 扔完还得手动开回来, 中间被人贴脸就是白挨一刀。现在只跳过投掷窗口这一拍
-     * 的出刀与朝向接管, 模块本身保持启用, 窗口一过立刻继续打。
-     *
-     * <p>用 gameTime 打时间戳而不是递减计数器: {@code MidPearl.onTick} 与
-     * {@code RotationHandler.onTickHigh} 跑在同一个 TickEvent 里, 递减法会依赖监听器注册
-     * 顺序 (谁先跑谁的计数就少一次), 时间戳法在整拍内恒定, 顺序无关。
-     */
-    public static void pauseFor(int ticks) {
-        if (ticks <= 0) {
-            return;
-        }
-        pauseUntilTick = Math.max(pauseUntilTick, currentTick() + ticks);
-    }
-
-    public static void clearPause() {
-        pauseUntilTick = Long.MIN_VALUE;
-    }
-
-    /** 当前是否处在投掷停摆窗口。 */
-    public static boolean isPaused() {
-        return currentTick() < pauseUntilTick;
-    }
-
-    private static long currentTick() {
-        if (mc.level != null) {
-            return mc.level.getGameTime();
-        }
-        return mc.player != null ? mc.player.tickCount : 0L;
-    }
 
     public static boolean shouldKeepSprintInDelayWindow() {
         if (mc.player == null || mc.level == null) return false;
@@ -608,65 +568,56 @@ public class KillAura extends Module {
                 && (this.throughWalls.getValue() || mc.player.hasLineOfSight(target));
     }
 
-    /**
-     * The crit gate. While it holds, the sprint key is dropped and the sprint flag cleared from the
-     * SprintEvent handler, so the swing that follows lands as a crit instead of a sprint hit. The
-     * 3.5-block reach (12.25 squared) and the velocity interlocks are what keep the release from
-     * firing at the wrong time.
-     *
-     * <p>Per tick by construction: every caller re-evaluates it, so the moment the target leaves
-     * 3.5 blocks (or velocity takes over, or keepSprint is off) the sprint comes straight back.
-     * 60ad1c0 曾把它换成 sticky 的 sprintCancelled + 单一复位点，结果是打完人目标被击退、
-     * 或落地时 onGround 没及时翻 true，标记就永远粘着，疾跑再也回不来。
-     */
-    public boolean canCritUnderVelocity() {
-        if (mc.player == null || mc.level == null || target == null) {
+    private boolean shouldDropSprintForCrit() {
+        if (!this.keepSprint.getValue() || this.bypassKS || mc.player == null || !mc.player.isSprinting()) {
             return false;
         }
-        if (AntiKB.INSTANCE != null && AntiKB.INSTANCE.isEnabled()) {
-            if (NoXZMode.isInDelayWindow() && shouldKeepSprintInDelayWindow()) {
-                return false;
-            }
-            if (NoXZMode.isCountering()) {
-                return false;
-            }
-            if (AntiKB.mode.is("Jump Reset") && JumpResetMode.isJumping) {
-                return false;
-            }
-        }
-        if (target.distanceToSqr(mc.player) > 12.25) {
+        if (NoXZMode.isInDelayWindow()) {
             return false;
         }
-        if (mc.player.isDeadOrDying() || !this.keepSprint.getValue()) {
+        if (AntiKB.INSTANCE != null && AntiKB.INSTANCE.isEnabled()
+                && AntiKB.mode.is("Jump Reset") && JumpResetMode.isJumping) {
             return false;
         }
-        return !mc.player.isUsingItem() || !mc.options.keyUse.isDown();
+        if (mc.player.onGround() && mc.options.keyJump.isDown()) {
+            return false;
+        }
+        Rotation aim = this.rotation != null ? this.rotation : this.attackRotation();
+        return this.aimRayTarget(aim) != null;
     }
 
-    /**
-     * SprintEvent sits right before LocalPlayer.tick() calls super.tick(), which is the only window
-     * where releasing the sprint still produces a STOP_SPRINTING packet before the attack. Later
-     * than this the client has already moved with the +30% sprint attribute for the tick.
-     */
-    @EventTarget
-    public void onSprint(SprintEvent sprintEvent) {
-        if (!this.canCritUnderVelocity()) {
+    private void stopSprint() {
+        if (mc.player == null) {
             return;
         }
+        mc.player.setSprinting(false);
         mc.options.keySprint.setDown(false);
-        if (mc.player != null && mc.player.isSprinting()) {
-            mc.player.setSprinting(false);
-        }
     }
 
-    /**
-     * Naven onAttackSlowdown: keepSprint cancels the vanilla setSprinting(false) inside
-     * Player.attack at the source (PlayerPatch WrapInvoke -> EventAttackSlowdown). The
-     * release-for-crit half belongs to the Sprint module (Naven's Sprint.onSprint).
-     */
+    private boolean isFallingForCrit() {
+        if (mc.player == null) {
+            return false;
+        }
+        if (mc.player.onGround() || mc.player.onClimbable() || mc.player.isInWater()
+                || mc.player.isInLava() || mc.player.isPassenger()) {
+            return false;
+        }
+        return mc.player.fallDistance > 0.0f && mc.player.getDeltaMovement().y < 0.0;
+    }
+
+    private boolean holdAttackForFall() {
+        if (mc.player == null) {
+            return false;
+        }
+        if (!this.fallOnly.getValue() || mc.player.onGround() || this.target == null) {
+            return false;
+        }
+        return !this.isFallingForCrit();
+    }
+
     @EventTarget
     public void onAttackSlowdown(EventAttackSlowdown event) {
-        if (event.isSprintReset() && this.keepSprint.getValue()) {
+        if (this.keepSprint.getValue()) {
             event.setCancelled(true);
         }
     }
@@ -676,8 +627,6 @@ public class KillAura extends Module {
         target = null;
         aimingTarget = null;
         this.attacks = 0.0f;
-        // gameTime 换世界会归零, 不清掉时间戳可能让光环在新世界永久停摆。
-        clearPause();
         this.setEnabled(false);
     }
 

@@ -231,7 +231,20 @@ implements Closeable {
     public void drawStringRGB(PoseStack poseStack, String text, float x, float y, float r, float g, float b, float a) {
         this.drawStringRGBFull(poseStack, text, x, y, r, g, b, a, false, 0);
     }
+
+    public void drawStringAdditive(PoseStack poseStack, String text, double x, double y, int color) {
+        float r = (float)(color >> 16 & 0xFF) / 255.0f;
+        float g = (float)(color >> 8 & 0xFF) / 255.0f;
+        float b = (float)(color & 0xFF) / 255.0f;
+        float a = (float)(color >> 24 & 0xFF) / 255.0f;
+        this.drawStringRGBFull(poseStack, text, (float)x, (float)y, r, g, b, a, false, 0, true);
+    }
+
     public void drawStringRGBFull(PoseStack poseStack, String text, float x, float y, float baseR, float baseG, float baseB, float alpha, boolean rainbow, int rainbowOffset) {
+        this.drawStringRGBFull(poseStack, text, x, y, baseR, baseG, baseB, alpha, rainbow, rainbowOffset, false);
+    }
+
+    public void drawStringRGBFull(PoseStack poseStack, String text, float x, float y, float baseR, float baseG, float baseB, float alpha, boolean rainbow, int rainbowOffset, boolean additive) {
         this.checkGuiScaleChanged();
         float curR = baseR;
         float curG = baseG;
@@ -240,18 +253,22 @@ implements Closeable {
         poseStack.translate(this.snap(x), this.snap(--y), 0.0);
         poseStack.scale(1.0F / this.scale, 1.0F / this.scale, 1.0F);
         RenderSystem.enableBlend();
-        RenderSystem.defaultBlendFunc();
+        if (additive) {
+            RenderSystem.blendFuncSeparate(770, 1, 1, 0);
+        } else {
+            RenderSystem.defaultBlendFunc();
+        }
         RenderSystem.disableCull();
         RenderSystem.setShader(GameRenderer::getPositionTexColorShader);
         Matrix4f pose = poseStack.last().pose();
-        char[] chars = text.toCharArray();
+        int textLength = text.length();
         float penX = 0.0F;
         float penY = 0.0F;
         boolean inFormatting = false;
         int lineStart = 0;
         synchronized (this.glyphPageMap) {
-            for (int i = 0; i < chars.length; i++) {
-                char ch = chars[i];
+            for (int i = 0; i < textLength; i++) {
+                char ch = text.charAt(i);
                 if (inFormatting) {
                     inFormatting = false;
                     char upper = Character.toUpperCase(ch);
@@ -345,9 +362,10 @@ implements Closeable {
         RenderSystem.setShader(GameRenderer::getPositionTexColorShader);
         Matrix4f pose = poseStack.last().pose();
         float penX = 0.0f;
+        int textLength = text.length();
         synchronized (this.glyphPageMap) {
-            for (char ch : text.toCharArray()) {
-                Glyph glyph = this.getOrLoadGlyph(ch);
+            for (int ci = 0; ci < textLength; ci++) {
+                Glyph glyph = this.getOrLoadGlyph(text.charAt(ci));
                 if (glyph == null) continue;
                 if (glyph.value() != ' ') {
                     this.glyphPageMap.computeIfAbsent(glyph.owner().textureLocation, key -> new ObjectArrayList<>())

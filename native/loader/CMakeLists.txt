@@ -39,6 +39,9 @@ qt_add_executable(OpenNiloreLoader WIN32
     src/SettingsPage.h
     src/PillSwitch.cpp
     src/PillSwitch.h
+    src/UiTheme.h
+    src/ThemePage.cpp
+    src/ThemePage.h
     src/loader_settings.cpp
     src/loader_settings.h
     src/hwid_spoof.cpp
@@ -71,6 +74,8 @@ target_link_libraries(OpenNiloreLoader PRIVATE
     psapi
     shlwapi
     user32
+    d3d11
+    dxgi
     dwmapi   # DwmSetWindowAttribute for Win11 rounded corners on frameless window
 )
 

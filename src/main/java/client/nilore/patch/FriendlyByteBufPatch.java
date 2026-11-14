@@ -19,14 +19,7 @@ import client.nilore.utils.misc.ReflectionUtil;
 public class FriendlyByteBufPatch extends ClientBase {
     public static MutableComponent readUtfWithNameProtection(String json) {
         String filtered = NameProtect.replacePlayerName(json);
-        MutableComponent component = Component.Serializer.fromJson(filtered);
-        if (component == null) {
-            return null;
-        }
-        // JSON 字符串级替换保住了名字(含 hover 里的), 但替换段不带颜色。
-        // 这里再走一遍组件级染色: 只给命中的替换段叠 TextColor, 其余格式原样。
-        Component colored = NameProtect.colorOccurrences(component);
-        return colored instanceof MutableComponent mutable ? mutable : component;
+        return Component.Serializer.fromJson(filtered);
     }
 
     @Transform(method = "readComponent", desc = "()Lnet/minecraft/network/chat/Component;")

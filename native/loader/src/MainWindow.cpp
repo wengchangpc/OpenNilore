@@ -4,7 +4,9 @@
 #include "InstanceList.h"
 #include "SettingsPage.h"
 #include "Sidebar.h"
+#include "ThemePage.h"
 #include "TitleBar.h"
+#include "UiTheme.h"
 #include "loader.h"
 #include "loader_settings.h"
 
@@ -18,7 +20,6 @@
 #include <QEasingCurve>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QLinearGradient>
 #include <QPainter>
 #include <QPainterPath>
 #include <QParallelAnimationGroup>
@@ -40,7 +41,6 @@
 namespace loader {
 
 namespace {
-constexpr int kCornerRadius = 12;
 constexpr int kBaseWidth    = 760;
 constexpr int kBaseHeight   = 500;
 constexpr int kSizeJitter   = 10;   // ± px of random size jitter applied per launch
@@ -89,6 +89,9 @@ MainWindow::MainWindow(QWidget* parent)
     // shape the window however we like. The custom TitleBar covers move/
     // minimize/close.
     setWindowFlags(Qt::FramelessWindowHint | Qt::Window);
+    // Layered so the desktop behind the frame stays visible: the capture
+    // pipeline only ever sees the composited screen, and an opaque window
+    // would simply hide the very thing we want to blur.
     setAttribute(Qt::WA_TranslucentBackground);
     setAttribute(Qt::WA_NoSystemBackground);
     // Base size with a small random jitter (±kSizeJitter px) on each axis so the
@@ -157,27 +160,51 @@ void MainWindow::buildUi() {
     settingsPage_->setVisible(false);
     bodyLayout->addWidget(settingsPage_, 1);
 
+    themePage_ = new ThemePage(body);
+    themePage_->setVisible(false);
+    bodyLayout->addWidget(themePage_, 1);
+
     connect(sidebar_, &Sidebar::injectClicked, this, [this] {
         list_->setVisible(true);
         settingsPage_->setVisible(false);
+        themePage_->setVisible(false);
     });
     connect(sidebar_, &Sidebar::settingsClicked, this, [this] {
         list_->setVisible(false);
         settingsPage_->setVisible(true);
+        themePage_->setVisible(false);
     });
+    connect(sidebar_, &Sidebar::themeClicked, this, [this] {
+        list_->setVisible(false);
+        settingsPage_->setVisible(false);
+        themePage_->setVisible(true);
+    });
+
+    connect(themePage_, &ThemePage::translucentChanged,
+            this, &MainWindow::setTranslucentMode);
+    themePage_->setTranslucent(translucent_);
 
     root->addWidget(body, 1);
 
     auto* statusRow = new QWidget(central);
+    statusRow->setFixedHeight(ui::kStatusHeight);
     auto* statusRowLayout = new QHBoxLayout(statusRow);
-    statusRowLayout->setContentsMargins(10, 0, 10, 10);
+    statusRowLayout->setContentsMargins(ui::kGutter, 0, ui::kGutterRight, ui::kGutter);
+    statusRowLayout->setSpacing(0);
     status_ = new QLabel(statusRow);
     status_->setObjectName("status");
-    statusRowLayout->addWidget(status_);
+    statusRowLayout->addWidget(status_, 0, Qt::AlignBottom);
     statusRowLayout->addStretch(1);
     root->addWidget(statusRow);
 
     setCentralWidget(central);
+
+    // The viewport must not paint the palette background either, otherwise it
+    // covers the DWM backdrop the window sits on.
+    if (QWidget* viewport = central->parentWidget()) {
+        viewport->setAttribute(Qt::WA_TranslucentBackground);
+        viewport->setAutoFillBackground(false);
+    }
 }
 
 void MainWindow::styleApp() {
@@ -187,27 +214,26 @@ void MainWindow::styleApp() {
     static const char* kQss = R"qss(
         QWidget#body {
             background: transparent;
-            color: #e3e5ea;
-            font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
-            font-size: 13px;
-        }
-        QLabel#title {
-            font-size: 18px;
-            font-weight: 600;
-            color: #ffffff;
-            padding: 2px 0 0 2px;
-        }
-        QLabel#hint {
-            color: #8a8e98;
-            font-size: 12px;
-            padding-left: 2px;
+            color: #E6EAF0;
         }
         QLabel#status {
-            color: #c2c6cf;
-            padding: 7px 11px;
-            border: 1px solid #2c2e35;
-            border-radius: 7px;
-            background: rgba(35, 37, 43, 200);
+            color: #7C838E;
+            font-size: 11px;
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                        stop:0 rgba(255, 255, 255, 17),
+                                        stop:1 rgba(255, 255, 255, 6));
+            border: none;
+            border-radius: 8px;
+            padding: 8px;
+        }
+        QLabel#title {
+            font-size: 17px;
+            font-weight: 600;
+            color: #FFFFFF;
+        }
+        QLabel#hint {
+            color: #5E656F;
+            font-size: 11px;
         }
     )qss";
     qApp->setStyleSheet(QString::fromUtf8(kQss));
@@ -215,13 +241,23 @@ void MainWindow::styleApp() {
 
 void MainWindow::enableWin11RoundedCorners() {
 #ifdef Q_OS_WIN
-    // DWMWA_WINDOW_CORNER_PREFERENCE is Windows 11+. The call is harmless
-    // (returns an HRESULT we ignore) on Windows 10 — DwmSetWindowAttribute
-    // just rejects the unknown attribute, no crash.
-    enum { DWMWA_WINDOW_CORNER_PREFERENCE_LOCAL = 33 };
-    enum { DWMWCP_ROUND_LOCAL = 2 };
     HWND hwnd = reinterpret_cast<HWND>(winId());
     if (!hwnd) return;
+
+    // Windows 11 paints a 1px system border around frameless windows. Setting
+    // DWMWA_BORDER_COLOR to DWMWA_COLOR_NONE removes it, leaving only the
+    // rounded panel we draw ourselves in paintEvent.
+    enum { DWMWA_BORDER_COLOR_LOCAL = 34 };
+    const DWORD borderNone = 0xFFFFFFFE;   // DWMWA_COLOR_NONE
+    DwmSetWindowAttribute(hwnd,
+                          DWMWA_BORDER_COLOR_LOCAL,
+                          &borderNone,
+                          sizeof(borderNone));
+
+    // The window is rounded by DWM itself (8px, same radius we paint), so the
+    // acrylic backdrop is clipped to the rounded shape as well.
+    enum { DWMWA_WINDOW_CORNER_PREFERENCE_LOCAL = 33 };
+    enum { DWMWCP_ROUND_LOCAL = 2 };
     int pref = DWMWCP_ROUND_LOCAL;
     DwmSetWindowAttribute(hwnd,
                           DWMWA_WINDOW_CORNER_PREFERENCE_LOCAL,
@@ -230,22 +266,24 @@ void MainWindow::enableWin11RoundedCorners() {
 #endif
 }
 
+void MainWindow::setTranslucentMode(bool on) {
+    if (translucent_ == on) return;
+    translucent_ = on;
+    if (themePage_) themePage_->setTranslucent(on);
+    update();
+}
+
 void MainWindow::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
 
-    QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
     QPainterPath panel;
-    panel.addRoundedRect(r, kCornerRadius, kCornerRadius);
+    panel.addRoundedRect(r, ui::kWindowRadius, ui::kWindowRadius);
 
-    QLinearGradient bg(r.topLeft(), r.bottomLeft());
-    bg.setColorAt(0.0, QColor("#1f2127"));
-    bg.setColorAt(1.0, QColor("#15171c"));
-    p.fillPath(panel, bg);
-
-    p.setPen(QPen(QColor(255, 255, 255, 26), 1));
-    p.setBrush(Qt::NoBrush);
-    p.drawPath(panel);
+    QColor base = ui::bgWindow();
+    base.setAlpha(translucent_ ? 230 : 255);
+    p.fillPath(panel, base);
 }
 
 void MainWindow::showEvent(QShowEvent* e) {
@@ -258,6 +296,10 @@ void MainWindow::showEvent(QShowEvent* e) {
 
 void MainWindow::playEntrance() {
     entrancePlayed_ = true;
+    // The window has to exist (and know where it landed) before the screen
+    // can be sampled, but it must stay invisible while sampling so the grab
+    // sees whatever is behind it instead of the frame itself.
+    setWindowOpacity(0.0);
     show();
     raise();
     activateWindow();

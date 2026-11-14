@@ -3,7 +3,6 @@ package client.nilore.patch;
 import asm.patchify.annotation.At;
 import asm.patchify.annotation.Inject;
 import asm.patchify.annotation.Patch;
-import asm.patchify.annotation.WrapInvoke;
 import com.mojang.math.Axis;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.entity.EntityRenderDispatcher;
@@ -15,12 +14,9 @@ import net.minecraft.world.entity.ExperienceOrb;
 import net.minecraft.world.entity.projectile.AbstractArrow;
 import net.minecraft.world.entity.projectile.ThrownTrident;
 import client.nilore.NiloreClient;
-import client.nilore.asm.Invocation;
-import client.nilore.modules.impl.render.BetterFPS;
 import client.nilore.modules.impl.render.EntityDuang;
 import client.nilore.modules.impl.render.EntityEditor;
 import client.nilore.modules.impl.render.FakeAntiAim;
-import client.nilore.modules.impl.render.SkinGlow;
 import client.nilore.utils.render.EntityUtil;
 
 import java.util.Map;
@@ -48,14 +44,6 @@ public class EntityRenderDispatcherPatch {
 
         Minecraft mc = Minecraft.getInstance();
         if (!NiloreClient.isReady()) return;
-
-        // 性能剔除放在最前面: 越早返回, 省掉的矩阵运算和 draw call 越多。
-        // x/y/z 这里是"实体插值位置 - 相机位置", 正好是判定距离要用的量。
-        BetterFPS betterFPS = BetterFPS.INSTANCE;
-        if (betterFPS != null && betterFPS.shouldCullEntity(entity, x, y, z)) {
-            ci.cancel();
-            return;
-        }
 
         boolean shouldProcessEditor = EntityEditor.INSTANCE != null && EntityEditor.INSTANCE.isEnabled();
 
@@ -181,30 +169,6 @@ public class EntityRenderDispatcherPatch {
                 IS_RENDERING_FAKE.set(false);
             }
         }
-    }
-
-    /**
-     * SkinGlow: 包住 render 内部对 getPackedLightCoords 的调用, 命中目标时返回满亮度
-     * 0xF000F0 (LightTexture.FULL_BRIGHT: 天空光 15 + 方块光 15)。这是原版实体光照的
-     * 公共上游, 改一处则皮肤/盔甲/披风/手持全链路一起亮。
-     */
-    @WrapInvoke(
-            method = "render",
-            desc = "(Lnet/minecraft/world/entity/Entity;DDDFFLcom/mojang/blaze3d/vertex/PoseStack;Lnet/minecraft/client/renderer/MultiBufferSource;I)V",
-            target = "net/minecraft/client/renderer/entity/EntityRenderDispatcher/getPackedLightCoords",
-            targetDesc = "(Lnet/minecraft/world/entity/Entity;F)I"
-    )
-    public static Integer onGetPackedLightCoords(
-            EntityRenderDispatcher dispatcher, Entity entity,
-            double x, double y, double z, float yaw, float partialTick,
-            com.mojang.blaze3d.vertex.PoseStack poseStack,
-            net.minecraft.client.renderer.MultiBufferSource buffer, int light,
-            Invocation<EntityRenderDispatcher, Integer> original) throws Exception {
-        SkinGlow skinGlow = SkinGlow.INSTANCE;
-        if (skinGlow != null && skinGlow.appliesTo(entity)) {
-            return 0xF000F0;
-        }
-        return original.call();
     }
 
     private static float[] visualScaleOf(Entity entity, float partialTick) {

@@ -17,7 +17,6 @@ import client.nilore.ClientBase;
 import client.nilore.NiloreClient;
 import client.nilore.asm.Invocation;
 import client.nilore.event.impl.UpdateHeldItemEvent;
-import client.nilore.modules.impl.render.FirstPersonModel;
 import client.nilore.modules.impl.render.OldHitting;
 
 @Patch(ItemInHandRenderer.class)
@@ -54,13 +53,6 @@ public class ItemInHandRendererPatch {
             MultiBufferSource bufferSource,
             int packedLight,
             CallbackInfo callbackInfo) {
-        // FirstPersonModel: 藏手臂时不画原版第一人称手 (身体模型由该模块自己补)。
-        if (NiloreClient.isReady() && FirstPersonModel.INSTANCE != null
-                && FirstPersonModel.INSTANCE.isEnabled()
-                && FirstPersonModel.INSTANCE.hideArms.getValue()) {
-            callbackInfo.cancel();
-            return;
-        }
         if (!NiloreClient.isReady() || OldHitting.INSTANCE == null || !OldHitting.INSTANCE.isEnabled()) {
             return;
         }

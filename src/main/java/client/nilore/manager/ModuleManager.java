@@ -15,13 +15,10 @@ import client.nilore.modules.Module;
 import client.nilore.modules.impl.combat.AntiBots;
 import client.nilore.modules.impl.combat.AntiFireball;
 import client.nilore.modules.impl.combat.AntiKB;
-import client.nilore.modules.impl.combat.AutoGapple;
 import client.nilore.modules.impl.combat.AutoOffHand;
 import client.nilore.modules.impl.combat.AutoSoup;
 import client.nilore.modules.impl.combat.AutoThrow;
 import client.nilore.modules.impl.combat.Backtrack;
-import client.nilore.modules.impl.combat.BowAimbot;
-import client.nilore.modules.impl.combat.Critical;
 import client.nilore.modules.impl.combat.CrystalAura;
 import client.nilore.modules.impl.combat.KillAura;
 import client.nilore.modules.impl.exploit.Disabler;
@@ -84,13 +81,10 @@ public class ModuleManager extends ClientBase {
         this.register(new AntiBots());
         this.register(new AntiFireball());
         this.register(new AntiKB());
-        this.register(new AutoGapple());
         this.register(new AutoOffHand());
         this.register(new AutoSoup());
         this.register(new AutoThrow());
         this.register(new Backtrack());
-        this.register(new BowAimbot());
-        this.register(new Critical());
         this.register(new CrystalAura());
         this.register(new KillAura());
 
@@ -141,14 +135,10 @@ public class ModuleManager extends ClientBase {
         this.register(new EntityEditor());
         this.register(new EntityDuang());
         this.register(new AudioVisualizer());
-        this.register(new Cape());
-        this.register(new Cosmetics());
         this.register(new FakeAntiAim());
-        this.register(new FirstPersonModel());
         this.register(new FullBright());
         this.register(new Interface());
         this.register(new ItemTags());
-        this.register(new KillEffect());
         this.register(new LyricsModule());
         this.register(new NameProtect());
         this.register(new NameTags());
@@ -156,11 +146,8 @@ public class ModuleManager extends ClientBase {
         this.register(new NoHurtCam());
         this.register(new OldHitting());
         this.register(new Projectiles());
-        this.register(new Skin());
-        this.register(new SkinGlow());
         this.register(new TimeWeather());
         this.register(new Watermark());
-        this.register(new Wings());
         this.register(new XRay());
 
         this.register(new AntiStaff());

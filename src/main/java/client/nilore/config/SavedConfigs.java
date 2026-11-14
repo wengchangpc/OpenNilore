@@ -202,9 +202,6 @@ public final class SavedConfigs {
         if (setting instanceof MultiSelectSetting) {
             return element.isJsonArray();
         }
-        if (setting instanceof client.nilore.settings.impl.StringSetting) {
-            return element.isJsonPrimitive() && element.getAsJsonPrimitive().isString();
-        }
         return false;
     }
 
