@@ -10,6 +10,8 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import client.nilore.NiloreClient;
+import client.nilore.modules.impl.render.BetterFPS;
+import client.nilore.modules.impl.render.FirstPersonModel;
 import client.nilore.modules.impl.render.NameTags;
 
 @Patch(EntityRenderer.class)
@@ -20,7 +22,26 @@ public class EntityRendererPatch {
             at = @At(At.Type.HEAD)
     )
     public static void onRenderNameTag(EntityRenderer<?> renderer, Entity entity, Component component, PoseStack poseStack, MultiBufferSource bufferSource, int packedLight, CallbackInfo callbackInfo) {
-        if (entity instanceof LivingEntity && NiloreClient.isReady() && NameTags.INSTANCE != null && NameTags.INSTANCE.isEnabled()) {
+        if (!NiloreClient.isReady()) {
+            return;
+        }
+        // FirstPersonModel: 第一人称补画的自己带着一条头顶名字牌, 低头看身体时
+        // 名字牌悬在视线中央挡视野, 一律取消。
+        if (entity == net.minecraft.client.Minecraft.getInstance().player
+                && FirstPersonModel.INSTANCE != null && FirstPersonModel.INSTANCE.isEnabled()
+                && net.minecraft.client.Minecraft.getInstance().options.getCameraType().isFirstPerson()) {
+            callbackInfo.cancel();
+            return;
+        }
+        // NameTags 自己接管名字牌时, 原版这一个整个不画。
+        if (entity instanceof LivingEntity && NameTags.INSTANCE != null && NameTags.INSTANCE.isEnabled()) {
+            callbackInfo.cancel();
+            return;
+        }
+        // 否则只做距离/背面剔除。名字牌比实体本身还贵: 每个都是一次批量文字构建加一次
+        // batch flush, 人多的服务器上几十个名字牌能吃掉可观的一截帧时间。
+        BetterFPS betterFPS = BetterFPS.INSTANCE;
+        if (betterFPS != null && betterFPS.shouldCullNameTag(entity)) {
             callbackInfo.cancel();
         }
     }

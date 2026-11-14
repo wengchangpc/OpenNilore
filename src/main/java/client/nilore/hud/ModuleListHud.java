@@ -2,6 +2,7 @@ package client.nilore.hud;
 
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -43,6 +44,10 @@ public class ModuleListHud extends HudElement {
         private float textWidth;
         private float rowWidth;
         private boolean targetVisible;
+        /** Font renderer the cached metrics were measured with; {@code null} = MC font. */
+        private FontRenderer measuredFont;
+        private boolean measured;
+        private boolean measuredWithMcFont;
 
         private AnimatedRow(Module module) {
             this.module = module;
@@ -51,10 +56,27 @@ public class ModuleListHud extends HudElement {
             this.progressAnim.setToValue(0.0f);
         }
 
-        private void updateMetrics(String displayName, float textWidth, float rowWidth) {
+        private void updateMetrics(String displayName, float textWidth, float rowWidth,
+                                   FontRenderer font, boolean withMcFont) {
             this.name = displayName;
             this.textWidth = textWidth;
             this.rowWidth = rowWidth;
+            this.measuredFont = font;
+            this.measuredWithMcFont = withMcFont;
+            this.measured = true;
+        }
+
+        /**
+         * Cheap change detection so the (comparatively expensive) glyph walk in
+         * {@code mc.font.width}/{@code GlHelper.getStringWidth} only runs when the
+         * rendered text or the active font actually changed. This method runs for
+         * every enabled module on every frame, so it must stay allocation-free.
+         */
+        private boolean isMeasureStale(String displayName, FontRenderer font, boolean withMcFont) {
+            return !this.measured
+                    || this.measuredWithMcFont != withMcFont
+                    || this.measuredFont != font
+                    || !this.name.equals(displayName);
         }
 
         private void setTargetVisible(boolean visible) {
@@ -182,6 +204,16 @@ public class ModuleListHud extends HudElement {
     private final SmoothAnimationTimer widthAnim = new SmoothAnimationTimer();
     private final SmoothAnimationTimer heightAnim = new SmoothAnimationTimer();
     private final Map<Module, AnimatedRow> rowStates = new IdentityHashMap<>();
+    /** Reused between frames: {@code updateRows()} runs on every render pass. */
+    private final List<AnimatedRow> rowBuffer = new ArrayList<>();
+    /** 拍内显示名缓存, 见 {@link #displayName(Module)}。 */
+    private final Map<Module, String> displayNameCache = new IdentityHashMap<>();
+    private long displayNameTick = Long.MIN_VALUE;
+    /** 按 fontMode 缓存的字体实例, 避免每帧拼接缓存键。 */
+    private FontRenderer resolvedFont;
+    private String resolvedFontMode;
+    private static final java.util.Comparator<AnimatedRow> WIDTH_DESCENDING =
+            (a, b) -> Float.compare(b.textWidth, a.textWidth);
     private boolean animationReady;
 
     public ModuleListHud() {
@@ -272,21 +304,33 @@ public class ModuleListHud extends HudElement {
                     this.rowStates.put(module, row);
                 }
                 String displayName = this.displayName(module);
-                float textWidth = useMcFont
-                        ? mc.font.width(displayName)
-                        : GlHelper.getStringWidth(displayName, font);
-                row.updateMetrics(displayName, textWidth, this.rowWidth(textWidth));
+                if (row.isMeasureStale(displayName, font, useMcFont)) {
+                    float textWidth = useMcFont
+                            ? mc.font.width(displayName)
+                            : GlHelper.getStringWidth(displayName, font);
+                    row.updateMetrics(displayName, textWidth, this.rowWidth(textWidth), font, useMcFont);
+                }
                 row.setTargetVisible(true);
             } else if (row != null) {
                 row.setTargetVisible(false);
             }
         }
-        this.rowStates.values().forEach(AnimatedRow::tick);
-        this.rowStates.values().removeIf(AnimatedRow::isFinishedRemoving);
-
-        List<AnimatedRow> rows = new ArrayList<>(this.rowStates.values());
-        rows.sort((a, b) -> Float.compare(b.textWidth, a.textWidth));
-        return rows;
+        // 一次遍历同时完成 tick、淘汰和收集。原来这里是三趟
+        // (values().forEach -> removeIf -> addAll)，每帧三次迭代器分配加两次全表扫描,
+        // 而三者本来就只需要同一个遍历顺序。
+        this.rowBuffer.clear();
+        Iterator<AnimatedRow> iterator = this.rowStates.values().iterator();
+        while (iterator.hasNext()) {
+            AnimatedRow row = iterator.next();
+            row.tick();
+            if (row.isFinishedRemoving()) {
+                iterator.remove();
+                continue;
+            }
+            this.rowBuffer.add(row);
+        }
+        this.rowBuffer.sort(WIDTH_DESCENDING);
+        return this.rowBuffer;
     }
 
     private boolean usesMinecraftFont() {
@@ -294,13 +338,43 @@ public class ModuleListHud extends HudElement {
     }
 
     private FontRenderer resolveCustomFont() {
-        if (this.fontMode != null && "Product Sans".equals(this.fontMode.getValue())) {
-            return FontPresets.productSans(18.0f);
+        // Fonts.getRenderer 本身有缓存, 但缓存键是 name + "-" + size 拼出来的字符串,
+        // 每次调用都要新建一个 String 再做一次哈希查找。这里是每帧路径, 所以把结果
+        // 按 fontMode 存下来, 只有切字体时才重新解析。
+        String mode = this.fontMode == null ? null : this.fontMode.getValue();
+        if (this.resolvedFont != null && java.util.Objects.equals(mode, this.resolvedFontMode)) {
+            return this.resolvedFont;
         }
-        return FontPresets.pingfang(18.0f);
+        this.resolvedFontMode = mode;
+        this.resolvedFont = "Product Sans".equals(mode)
+                ? FontPresets.productSans(18.0f)
+                : FontPresets.pingfang(18.0f);
+        return this.resolvedFont;
     }
 
+    /**
+     * 显示名每个启用模块每帧都要取一次, 而它由 {@code getSuffix()} 拼出来 ——
+     * Scaffold / KillAura 这类带后缀的模块会每帧产生一个新字符串。
+     *
+     * <p>后缀最快也就一拍变一次, 所以按拍缓存: 同一拍内所有帧共用同一个字符串,
+     * 高帧率下每帧的字符串分配基本降为零。</p>
+     */
     private String displayName(Module module) {
+        long tick = this.currentTick();
+        if (tick != this.displayNameTick) {
+            this.displayNameTick = tick;
+            this.displayNameCache.clear();
+        }
+        String cached = this.displayNameCache.get(module);
+        if (cached != null) {
+            return cached;
+        }
+        String computed = this.computeDisplayName(module);
+        this.displayNameCache.put(module, computed);
+        return computed;
+    }
+
+    private String computeDisplayName(Module module) {
         String name = module.getName();
         if (!this.showSuffix.getValue()) {
             return name;
@@ -314,6 +388,13 @@ public class ModuleListHud extends HudElement {
             suffix = suffix.toLowerCase(Locale.ROOT);
         }
         return name + " " + suffix;
+    }
+
+    private long currentTick() {
+        if (mc.level != null) {
+            return mc.level.getGameTime();
+        }
+        return mc.player != null ? mc.player.tickCount : 0L;
     }
 
     @Override

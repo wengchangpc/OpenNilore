@@ -15,6 +15,7 @@ import client.nilore.settings.impl.BooleanSetting;
 import client.nilore.settings.impl.ModeSetting;
 import client.nilore.settings.impl.MultiSelectSetting;
 import client.nilore.settings.impl.NumberSetting;
+import client.nilore.settings.impl.StringSetting;
 
 public class ValuesConfig
 extends Config {
@@ -82,6 +83,14 @@ extends Config {
                                 modeSetting.setValue(string5);
                             }
                             break;
+                        case "S":
+                            // 只对 StringSetting 生效, 其它类型收到 S 行说明配置串了类型, 报错而不是强转。
+                            if (setting instanceof StringSetting stringSetting) {
+                                stringSetting.setValue(string5);
+                            } else {
+                                LOGGER.error("Type mismatch for value {}!", string6);
+                            }
+                            break;
                         default:
                             LOGGER.error("Unknown value type of {}!", string3);
                     }
@@ -109,6 +118,9 @@ extends Config {
                         bufferedWriter.write(String.format((String)"M:%s:%s:%s\n", (Object[])new Object[]{module.getName(), modeSetting.getName(), modeSetting.getValue()}));
                     } else if (setting instanceof MultiSelectSetting multiSelectSetting) {
                         bufferedWriter.write(String.format((String)"MV:%s:%s:%s\n", (Object[])new Object[]{module.getName(), multiSelectSetting.getName(), String.join(",", multiSelectSetting.getValue())}));
+                    } else if (setting instanceof StringSetting stringSetting) {
+                        // 名字可能带冒号; 行格式是 split(":", 4), 第 4 段原样保留, 所以冒号安全。
+                        bufferedWriter.write(String.format((String)"S:%s:%s:%s\n", (Object[])new Object[]{module.getName(), stringSetting.getName(), stringSetting.getValue()}));
                     } else {
                         LOGGER.error("Unknown value type of {}!", setting.getName());
                     }

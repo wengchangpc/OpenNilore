@@ -55,15 +55,20 @@ extends ClientBase {
 
     public void registerSettings() {
         for (Field field : this.getClass().getDeclaredFields()) {
+            // Field.isAccessible() has been deprecated since Java 9 and no longer
+            // reports what it used to, so use trySetAccessible() and bail out
+            // explicitly instead of silently swallowing the field.
+            if (!field.trySetAccessible()) {
+                logger.warn(REGISTER_FAIL_MSG + this.getName() + " (field " + field.getName() + ")");
+                continue;
+            }
             try {
-                Object value;
-                if (!field.isAccessible()) {
-                    field.setAccessible(true);
+                Object value = field.get(this);
+                if (value instanceof Setting) {
+                    this.addSetting((Setting) value);
                 }
-                if (!((value = field.get(this)) instanceof Setting)) continue;
-                this.addSetting((Setting)value);
             } catch (IllegalAccessException ex) {
-                System.out.println(REGISTER_FAIL_MSG + this.getName() + "!");
+                logger.warn(REGISTER_FAIL_MSG + this.getName() + " (field " + field.getName() + ")", ex);
             }
         }
     }
